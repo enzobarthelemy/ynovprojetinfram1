@@ -1,8 +1,5 @@
-from aws_cdk import (
-    Stack,
-    aws_ec2 as ec2,
-    CfnOutput,
-)
+import os
+from aws_cdk import Stack, CfnOutput, aws_ec2 as ec2
 from constructs import Construct
 
 
@@ -11,34 +8,55 @@ class CdkEc2Stack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        vpc = ec2.Vpc(self, "Vpc",
-            max_azs=1,
-            nat_gateways=0,
-            subnet_configuration=[
-                ec2.SubnetConfiguration(
-                    name="Public",
-                    subnet_type=ec2.SubnetType.PUBLIC,
-                )
-            ]
+        vpc = ec2.CfnVPC(self, "Vpc", cidr_block="10.0.0.0/16")
+
+        igw = ec2.CfnInternetGateway(self, "IGW")
+        ec2.CfnVPCGatewayAttachment(self, "IGWAttach",
+            vpc_id=vpc.ref,
+            internet_gateway_id=igw.ref,
         )
 
-        sg = ec2.SecurityGroup(self, "SecurityGroup",
-            vpc=vpc,
-            description="Allow SSH and HTTP",
-            allow_all_outbound=True,
-        )
-        sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(22), "SSH")
-        sg.add_ingress_rule(ec2.Peer.any_ipv4(), ec2.Port.tcp(80), "HTTP")
-
-        instance = ec2.Instance(self, "EC2Instance",
-            instance_type=ec2.InstanceType("t2.micro"),
-            machine_image=ec2.MachineImage.latest_amazon_linux2(),
-            vpc=vpc,
-            security_group=sg,
-            vpc_subnets=ec2.SubnetSelection(subnet_type=ec2.SubnetType.PUBLIC),
+        subnet = ec2.CfnSubnet(self, "Subnet",
+            vpc_id=vpc.ref,
+            cidr_block="10.0.1.0/24",
+            availability_zone="us-east-1a",
+            map_public_ip_on_launch=True,
         )
 
-        CfnOutput(self, "InstancePublicIP",
-            value=instance.instance_public_ip,
+        rt = ec2.CfnRouteTable(self, "RT", vpc_id=vpc.ref)
+        ec2.CfnRoute(self, "DefaultRoute",
+            route_table_id=rt.ref,
+            destination_cidr_block="0.0.0.0/0",
+            gateway_id=igw.ref,
+        )
+        ec2.CfnSubnetRouteTableAssociation(self, "RTAssoc",
+            subnet_id=subnet.ref,
+            route_table_id=rt.ref,
+        )
+
+        sg = ec2.CfnSecurityGroup(self, "SG",
+            vpc_id=vpc.ref,
+            group_description="Allow SSH and HTTP",
+            security_group_ingress=[
+                ec2.CfnSecurityGroup.IngressProperty(
+                    ip_protocol="tcp", from_port=22, to_port=22, cidr_ip="0.0.0.0/0",
+                ),
+                ec2.CfnSecurityGroup.IngressProperty(
+                    ip_protocol="tcp", from_port=80, to_port=80, cidr_ip="0.0.0.0/0",
+                ),
+            ],
+        )
+
+        ami_id = os.getenv("AMI_ID", "ami-0c02fb55956c7d316")
+
+        instance = ec2.CfnInstance(self, "EC2",
+            instance_type="t2.micro",
+            image_id=ami_id,
+            subnet_id=subnet.ref,
+            security_group_ids=[sg.ref],
+        )
+
+        CfnOutput(self, "PublicIP",
+            value=instance.attr_public_ip,
             description="EC2 Public IP",
         )

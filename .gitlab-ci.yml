@@ -10,6 +10,7 @@ deploy:
     - cd cdk-ec2
     - pip install -r requirements.txt
   script:
+    - export AMI_ID=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --query "Parameter.Value" --output text)
     - cdk synth
     - aws cloudformation deploy --template-file cdk.out/CdkEc2Stack.template.json --stack-name CdkEc2Stack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
   variables:
