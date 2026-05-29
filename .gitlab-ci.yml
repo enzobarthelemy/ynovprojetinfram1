@@ -1,19 +1,85 @@
 stages:
   - deploy
 
-deploy:
-  stage: deploy
+variables:
+  AWS_DEFAULT_REGION: us-east-1
+
+.base:
   image: nikolaik/python-nodejs:python3.13-nodejs20
   before_script:
     - pip install awscli aws-cdk-lib constructs
     - npm install -g aws-cdk
-    - cd cdk-ec2
+    - cd infra
     - pip install -r requirements.txt
+
+deploy-vpc:
+  extends: .base
+  stage: deploy
   script:
     - export AMI_ID=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --query "Parameter.Value" --output text)
-    - cdk synth
-    - aws cloudformation deploy --template-file cdk.out/CdkEc2Stack.template.json --stack-name CdkEc2Stack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
-  variables:
-    AWS_DEFAULT_REGION: us-east-1
+    - cdk synth VpcStack
+    - aws cloudformation deploy --template-file cdk.out/VpcStack.template.json --stack-name VpcStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
   only:
-    - mt
+    changes:
+      - infra/stacks/vpc_stack.py
+
+deploy-sg:
+  extends: .base
+  stage: deploy
+  script:
+    - cdk synth SgStack
+    - aws cloudformation deploy --template-file cdk.out/SgStack.template.json --stack-name SgStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+  only:
+    changes:
+      - infra/stacks/sg_stack.py
+
+deploy-ec2:
+  extends: .base
+  stage: deploy
+  script:
+    - export AMI_ID=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --query "Parameter.Value" --output text)
+    - cdk synth Ec2Stack
+    - aws cloudformation deploy --template-file cdk.out/Ec2Stack.template.json --stack-name Ec2Stack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+  only:
+    changes:
+      - infra/stacks/ec2_stack.py
+
+deploy-alb:
+  extends: .base
+  stage: deploy
+  script:
+    - cdk synth AlbStack
+    - aws cloudformation deploy --template-file cdk.out/AlbStack.template.json --stack-name AlbStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+  only:
+    changes:
+      - infra/stacks/alb_stack.py
+
+deploy-asg:
+  extends: .base
+  stage: deploy
+  script:
+    - cdk synth AsgStack
+    - aws cloudformation deploy --template-file cdk.out/AsgStack.template.json --stack-name AsgStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+  only:
+    changes:
+      - infra/stacks/asg_stack.py
+
+deploy-s3:
+  extends: .base
+  stage: deploy
+  script:
+    - cdk synth S3Stack
+    - aws cloudformation deploy --template-file cdk.out/S3Stack.template.json --stack-name S3Stack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+  only:
+    changes:
+      - infra/stacks/s3_stack.py
+
+deploy-rds:
+  extends: .base
+  stage: deploy
+  script:
+    - cdk synth RdsStack
+    - aws cloudformation deploy --template-file cdk.out/RdsStack.template.json --stack-name RdsStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+  only:
+    changes:
+      - infra/stacks/rds_stack.py
