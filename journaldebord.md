@@ -28,10 +28,12 @@ Composition du groupe :
 - Initialisation du dépôt git https://github.com/enzobarthelemy/ynovprojetinfram1
 - Création et alimentation du journal de bord "journaldebord.md"
 - Création et alimentation du fichier de choix du sujet "Sujet.md"
-- Recherches techniques : Docker Wordpress, BDD AWS RDS
-- Création d'une image Docker personnalisée Wordpress + WooCommerce
+- Recherches techniques : Docker Wordpress & WooCommerce, interconnexion avec les instances S3 et RDS
+- Alimentation du fichier vpc_stack.py, révision app.py et .gitlab-ci.yml + tests validés
 
 ** Thomas :
 - Recherches techniques : Docker Wordpress, ALB
-- Recherche mise en place CI/CD entre GitHub et GitLab pour déploiement automatisé sur AWS
-- Création d'une structure python
+- Initialisation du dépôt gitlab https://gitlab.com/Mar-Thomasx/ynovprojetinfram1
+- Mise en place CI/CD entre GitHub et GitLab pour déploiement automatisé sur AWS
+- Création d'une structure python pour le déploiement par CDK (app.py + xxx_stack.py)
+- Alimentation du fichier s3_stack.py, révision app.py et .gitlab-ci.yml + tests validés
