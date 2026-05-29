@@ -4,7 +4,7 @@ stages:
 variables:
   AWS_DEFAULT_REGION: us-east-1
 
-.deploy_base:
+.base:
   image: nikolaik/python-nodejs:python3.13-nodejs20
   before_script:
     - pip install awscli aws-cdk-lib constructs
@@ -13,7 +13,7 @@ variables:
     - pip install -r requirements.txt
 
 deploy-vpc:
-  extends: .deploy_base
+  extends: .base
   stage: deploy
   script:
     - export AMI_ID=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --query "Parameter.Value" --output text)
@@ -24,7 +24,7 @@ deploy-vpc:
       - infra/stacks/vpc_stack.py
 
 deploy-sg:
-  extends: .deploy_base
+  extends: .base
   stage: deploy
   script:
     - cdk synth SgStack
@@ -34,7 +34,7 @@ deploy-sg:
       - infra/stacks/sg_stack.py
 
 deploy-ec2:
-  extends: .deploy_base
+  extends: .base
   stage: deploy
   script:
     - export AMI_ID=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --query "Parameter.Value" --output text)
@@ -45,7 +45,7 @@ deploy-ec2:
       - infra/stacks/ec2_stack.py
 
 deploy-alb:
-  extends: .deploy_base
+  extends: .base
   stage: deploy
   script:
     - cdk synth AlbStack
@@ -55,7 +55,7 @@ deploy-alb:
       - infra/stacks/alb_stack.py
 
 deploy-asg:
-  extends: .deploy_base
+  extends: .base
   stage: deploy
   script:
     - cdk synth AsgStack
@@ -65,7 +65,7 @@ deploy-asg:
       - infra/stacks/asg_stack.py
 
 deploy-s3:
-  extends: .deploy_base
+  extends: .base
   stage: deploy
   script:
     - cdk synth S3Stack
@@ -75,7 +75,7 @@ deploy-s3:
       - infra/stacks/s3_stack.py
 
 deploy-rds:
-  extends: .deploy_base
+  extends: .base
   stage: deploy
   script:
     - cdk synth RdsStack
