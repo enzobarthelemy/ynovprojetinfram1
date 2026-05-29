@@ -10,7 +10,6 @@ deploy:
     - cd cdk-ec2
     - pip install -r requirements.txt
   script:
-    - cdk bootstrap aws://$AWS_ACCOUNT_ID/us-east-1
     - cdk deploy --require-approval never
   variables:
     AWS_DEFAULT_REGION: us-east-1
