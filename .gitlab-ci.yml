@@ -4,6 +4,7 @@ stages:
 
 variables:
   AWS_DEFAULT_REGION: us-east-1
+  AWS_PRIMARY_REGION: us-east-1
 
 .base:
   image: nikolaik/python-nodejs:python3.13-nodejs20
@@ -70,7 +71,7 @@ deploy-s3-secondary:
   stage: deploy
   script:
     - cdk synth S3SecondaryStack
-    - aws cloudformation deploy --template-file cdk.out/S3SecondaryStack.template.json --stack-name S3SecondaryStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region us-west-2
+    - aws cloudformation deploy --template-file cdk.out/S3SecondaryStack.template.json --stack-name S3SecondaryStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
       - infra/stacks/s3_stack.py

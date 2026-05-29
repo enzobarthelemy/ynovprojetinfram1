@@ -14,8 +14,8 @@ app = cdk.App()
 
 account_id = os.getenv("AWS_ACCOUNT_ID")
 
-env_east = cdk.Environment(account=account_id, region="us-east-1")
-env_west = cdk.Environment(account=account_id, region="us-west-2")
+env_east = cdk.Environment(account=account_id, region=os.getenv("AWS_PRIMARY_REGION", "us-east-1"))
+env_west = cdk.Environment(account=account_id, region=os.getenv("AWS_SECONDARY_REGION", "us-west-2"))
 
 synthesizer_east = cdk.BootstraplessSynthesizer(
     cloud_formation_execution_role_arn=f"arn:aws:iam::{account_id}:role/LabRole",
