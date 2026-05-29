@@ -5,7 +5,7 @@ deploy:
   stage: deploy
   image: nikolaik/python-nodejs:python3.13-nodejs20
   before_script:
-    - pip install aws-cdk-lib constructs
+    - pip install awscli aws-cdk-lib constructs
     - npm install -g aws-cdk
     - cd cdk-ec2
     - pip install -r requirements.txt
