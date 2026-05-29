@@ -13,7 +13,7 @@ CdkEc2Stack(app, "CdkEc2Stack",
         region='us-east-1'
     ),
     synthesizer=cdk.BootstraplessSynthesizer(
-        cloudformation_execution_role_arn=f"arn:aws:iam::{os.getenv('AWS_ACCOUNT_ID')}:role/LabRole",
+        cloud_formation_execution_role_arn=f"arn:aws:iam::{os.getenv('AWS_ACCOUNT_ID')}:role/LabRole",
         deploy_role_arn=f"arn:aws:iam::{os.getenv('AWS_ACCOUNT_ID')}:role/LabRole",
     ),
     )
