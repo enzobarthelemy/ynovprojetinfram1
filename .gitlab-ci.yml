@@ -1,5 +1,6 @@
 stages:
   - deploy
+  - deploy-s3-primary
 
 variables:
   AWS_DEFAULT_REGION: us-east-1
@@ -64,12 +65,22 @@ deploy-asg:
     changes:
       - infra/stacks/asg_stack.py
 
-deploy-s3:
+deploy-s3-secondary:
   extends: .base
   stage: deploy
   script:
-    - cdk synth S3Stack
-    - aws cloudformation deploy --template-file cdk.out/S3Stack.template.json --stack-name S3Stack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+    - cdk synth S3SecondaryStack
+    - aws cloudformation deploy --template-file cdk.out/S3SecondaryStack.template.json --stack-name S3SecondaryStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region us-west-2
+  only:
+    changes:
+      - infra/stacks/s3_stack.py
+
+deploy-s3-primary:
+  extends: .base
+  stage: deploy-s3-primary
+  script:
+    - cdk synth S3PrimaryStack
+    - aws cloudformation deploy --template-file cdk.out/S3PrimaryStack.template.json --stack-name S3PrimaryStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
   only:
     changes:
       - infra/stacks/s3_stack.py
