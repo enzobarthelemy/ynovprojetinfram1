@@ -10,7 +10,8 @@ deploy:
     - cd cdk-ec2
     - pip install -r requirements.txt
   script:
-    - cdk deploy --require-approval never
+    - cdk synth
+    - aws cloudformation deploy --template-file cdk.out/CdkEc2Stack.template.json --stack-name CdkEc2Stack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
   variables:
     AWS_DEFAULT_REGION: us-east-1
   only:
