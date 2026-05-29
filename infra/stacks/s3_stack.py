@@ -3,7 +3,7 @@ from aws_cdk import Stack, CfnOutput, aws_s3 as s3
 from constructs import Construct
 
 
-class S3PrimaryStack(Stack):
+class S3StackPrimary(Stack):
     """Bucket S3 principal en us-east-1 avec replication vers us-west-2"""
 
     def __init__(self, scope: Construct, construct_id: str, secondary_bucket_arn: str, **kwargs) -> None:
@@ -36,7 +36,7 @@ class S3PrimaryStack(Stack):
         CfnOutput(self, "PrimaryBucketArn", value=self.bucket.attr_arn)
 
 
-class S3SecondaryStack(Stack):
+class S3StackSecondary(Stack):
     """Bucket S3 backup en us-west-2"""
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
