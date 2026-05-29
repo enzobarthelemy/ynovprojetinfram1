@@ -5,6 +5,7 @@ stages:
 variables:
   AWS_DEFAULT_REGION: us-east-1
   AWS_PRIMARY_REGION: us-east-1
+  AWS_SECONDARY_REGION: us-west-2
 
 .base:
   image: nikolaik/python-nodejs:python3.13-nodejs20
@@ -18,9 +19,9 @@ deploy-vpc:
   extends: .base
   stage: deploy
   script:
-    - export AMI_ID=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --query "Parameter.Value" --output text)
-    - cdk synth VpcStack
-    - aws cloudformation deploy --template-file cdk.out/VpcStack.template.json --stack-name VpcStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+    - cdk synth VpcStackPrimary VpcStackSecondary
+    - aws cloudformation deploy --template-file cdk.out/VpcStackPrimary.template.json --stack-name VpcStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/VpcStackSecondary.template.json --stack-name VpcStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
       - infra/stacks/vpc_stack.py
@@ -29,8 +30,9 @@ deploy-sg:
   extends: .base
   stage: deploy
   script:
-    - cdk synth SgStack
-    - aws cloudformation deploy --template-file cdk.out/SgStack.template.json --stack-name SgStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+    - cdk synth SgStackPrimary SgStackSecondary
+    - aws cloudformation deploy --template-file cdk.out/SgStackPrimary.template.json --stack-name SgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/SgStackSecondary.template.json --stack-name SgStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
       - infra/stacks/sg_stack.py
@@ -40,8 +42,9 @@ deploy-ec2:
   stage: deploy
   script:
     - export AMI_ID=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --query "Parameter.Value" --output text)
-    - cdk synth Ec2Stack
-    - aws cloudformation deploy --template-file cdk.out/Ec2Stack.template.json --stack-name Ec2Stack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+    - cdk synth Ec2StackPrimary Ec2StackSecondary
+    - aws cloudformation deploy --template-file cdk.out/Ec2StackPrimary.template.json --stack-name Ec2StackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/Ec2StackSecondary.template.json --stack-name Ec2StackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
       - infra/stacks/ec2_stack.py
@@ -50,8 +53,9 @@ deploy-alb:
   extends: .base
   stage: deploy
   script:
-    - cdk synth AlbStack
-    - aws cloudformation deploy --template-file cdk.out/AlbStack.template.json --stack-name AlbStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+    - cdk synth AlbStackPrimary AlbStackSecondary
+    - aws cloudformation deploy --template-file cdk.out/AlbStackPrimary.template.json --stack-name AlbStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/AlbStackSecondary.template.json --stack-name AlbStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
       - infra/stacks/alb_stack.py
@@ -60,28 +64,31 @@ deploy-asg:
   extends: .base
   stage: deploy
   script:
-    - cdk synth AsgStack
-    - aws cloudformation deploy --template-file cdk.out/AsgStack.template.json --stack-name AsgStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+    - cdk synth AsgStackPrimary AsgStackSecondary
+    - aws cloudformation deploy --template-file cdk.out/AsgStackPrimary.template.json --stack-name AsgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/AsgStackSecondary.template.json --stack-name AsgStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
       - infra/stacks/asg_stack.py
 
+# S3 Secondary en us-west-2 d'abord (requis pour la Cross-Region Replication)
 deploy-s3-secondary:
   extends: .base
   stage: deploy
   script:
-    - cdk synth S3SecondaryStack
-    - aws cloudformation deploy --template-file cdk.out/S3SecondaryStack.template.json --stack-name S3SecondaryStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
+    - cdk synth S3StackSecondary
+    - aws cloudformation deploy --template-file cdk.out/S3StackSecondary.template.json --stack-name S3StackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
       - infra/stacks/s3_stack.py
 
+# S3 Primary en us-east-1 après le secondary (Cross-Region Replication)
 deploy-s3-primary:
   extends: .base
   stage: deploy-s3-primary
   script:
-    - cdk synth S3PrimaryStack
-    - aws cloudformation deploy --template-file cdk.out/S3PrimaryStack.template.json --stack-name S3PrimaryStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+    - cdk synth S3StackPrimary
+    - aws cloudformation deploy --template-file cdk.out/S3StackPrimary.template.json --stack-name S3StackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
   only:
     changes:
       - infra/stacks/s3_stack.py
@@ -90,8 +97,9 @@ deploy-rds:
   extends: .base
   stage: deploy
   script:
-    - cdk synth RdsStack
-    - aws cloudformation deploy --template-file cdk.out/RdsStack.template.json --stack-name RdsStack --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset
+    - cdk synth RdsStackPrimary RdsStackSecondary
+    - aws cloudformation deploy --template-file cdk.out/RdsStackPrimary.template.json --stack-name RdsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/RdsStackSecondary.template.json --stack-name RdsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
       - infra/stacks/rds_stack.py
