@@ -3,7 +3,7 @@ stages:
 
 deploy:
   stage: deploy
-  image: python:3.13
+  image: nikolaik/python-nodejs:python3.13-nodejs20
   before_script:
     - pip install aws-cdk-lib constructs
     - npm install -g aws-cdk
