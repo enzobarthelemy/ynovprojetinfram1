@@ -31,9 +31,9 @@ vpc_primary = VpcStackPrimary(app, "VpcStackPrimary", env=env_east, synthesizer=
 vpc_secondary = VpcStackSecondary(app, "VpcStackSecondary", env=env_west, synthesizer=synthesizer_west)
 
 # 2. Security Groups
-sg_primary = SgStackPrimary(app, "SgStackPrimary", vpc_stack=vpc_primary, env=env_east, synthesizer=synthesizer_east)
+sg_primary = SgStackPrimary(app, "SgStackPrimary", env=env_east, synthesizer=synthesizer_east)
 sg_primary.add_dependency(vpc_primary)
-sg_secondary = SgStackSecondary(app, "SgStackSecondary", vpc_stack=vpc_secondary, env=env_west, synthesizer=synthesizer_west)
+sg_secondary = SgStackSecondary(app, "SgStackSecondary", env=env_west, synthesizer=synthesizer_west)
 sg_secondary.add_dependency(vpc_secondary)
 
 # 3. EC2 — WordPress + WooCommerce (Docker)

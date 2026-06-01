@@ -30,6 +30,8 @@ deploy-sg:
   extends: .base
   stage: deploy
   script:
+    - export VPC_PRIMARY_ID=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
+    - export VPC_SECONDARY_ID=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
     - cdk synth SgStackPrimary SgStackSecondary
     - aws cloudformation deploy --template-file cdk.out/SgStackPrimary.template.json --stack-name SgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/SgStackSecondary.template.json --stack-name SgStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
