@@ -21,6 +21,19 @@ variables:
     - npm install -g aws-cdk
     - cd infra
     - pip install -r requirements.txt
+    # Fonction : supprime un stack bloqué en ROLLBACK_COMPLETE (échec CREATE initial)
+    # car CloudFormation refuse de le mettre à jour dans cet état
+    - |
+      clean_rollback() {
+        local NAME="$1"; local REGION="$2"
+        local STATUS
+        STATUS=$(aws cloudformation describe-stacks --stack-name "$NAME" --region "$REGION" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NONE")
+        if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
+          echo "Stack $NAME en ROLLBACK_COMPLETE -> suppression avant redeploiement"
+          aws cloudformation delete-stack --stack-name "$NAME" --region "$REGION"
+          aws cloudformation wait stack-delete-complete --stack-name "$NAME" --region "$REGION"
+        fi
+      }
 
 deploy-vpc:
   extends: .base
@@ -127,6 +140,7 @@ deploy-efs-primary:
     - export WEB_SUBNET_PRIMARY_2=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet2Id'].OutputValue" --output text)
     - export EFS_SG_PRIMARY=$(aws cloudformation describe-stacks --stack-name SgStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsSgId'].OutputValue" --output text)
     - cdk synth EfsStackPrimary
+    - clean_rollback EfsStackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/EfsStackPrimary.template.json --stack-name EfsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides WebSubnet1Id=$WEB_SUBNET_PRIMARY_1 WebSubnet2Id=$WEB_SUBNET_PRIMARY_2 EfsSgId=$EFS_SG_PRIMARY
     # Attendre que la réplication soit initialisée puis sauvegarder l'ID dans un artifact
     - sleep 30
@@ -152,6 +166,7 @@ deploy-efs-secondary:
     - export WEB_SUBNET_SECONDARY_2=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet2Id'].OutputValue" --output text)
     - export EFS_SG_SECONDARY=$(aws cloudformation describe-stacks --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsSgId'].OutputValue" --output text)
     - cdk synth EfsStackSecondary
+    - clean_rollback EfsStackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation deploy --template-file cdk.out/EfsStackSecondary.template.json --stack-name EfsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides WebSubnet1Id=$WEB_SUBNET_SECONDARY_1 WebSubnet2Id=$WEB_SUBNET_SECONDARY_2 EfsSgId=$EFS_SG_SECONDARY EfsSecondaryFsId=$EFS_SECONDARY_ID
   only:
     changes:
@@ -188,8 +203,10 @@ deploy-rds:
     - export DB_SG_PRIMARY_ID=$(aws cloudformation describe-stacks --stack-name SgStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSgId'].OutputValue" --output text)
     - export DB_SG_SECONDARY_ID=$(aws cloudformation describe-stacks --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSgId'].OutputValue" --output text)
     - cdk synth RdsStackPrimary RdsStackSecondary
+    - clean_rollback RdsStackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/RdsStackPrimary.template.json --stack-name RdsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides DbSubnet1Id=$DB_SUBNET_PRIMARY_1_ID DbSubnet2Id=$DB_SUBNET_PRIMARY_2_ID DbSgId=$DB_SG_PRIMARY_ID "DbPassword=$DB_PASSWORD"
     - export SOURCE_DB_ARN="arn:aws:rds:${AWS_PRIMARY_REGION}:${AWS_ACCOUNT_ID}:db:wordpress-rds-primary"
+    - clean_rollback RdsStackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation deploy --template-file cdk.out/RdsStackSecondary.template.json --stack-name RdsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides DbSubnet1Id=$DB_SUBNET_SECONDARY_1_ID DbSubnet2Id=$DB_SUBNET_SECONDARY_2_ID DbSgId=$DB_SG_SECONDARY_ID SourceDbArn=$SOURCE_DB_ARN
   only:
     changes:
