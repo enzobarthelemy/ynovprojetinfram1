@@ -205,9 +205,48 @@ deploy-rds:
     - cdk synth RdsStackPrimary RdsStackSecondary
     - clean_rollback RdsStackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/RdsStackPrimary.template.json --stack-name RdsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides DbSubnet1Id=$DB_SUBNET_PRIMARY_1_ID DbSubnet2Id=$DB_SUBNET_PRIMARY_2_ID DbSgId=$DB_SG_PRIMARY_ID "DbPassword=$DB_PASSWORD"
-    - export SOURCE_DB_ARN="arn:aws:rds:${AWS_PRIMARY_REGION}:${AWS_ACCOUNT_ID}:db:wordpress-rds-primary"
     - clean_rollback RdsStackSecondary $AWS_SECONDARY_REGION
-    - aws cloudformation deploy --template-file cdk.out/RdsStackSecondary.template.json --stack-name RdsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides DbSubnet1Id=$DB_SUBNET_SECONDARY_1_ID DbSubnet2Id=$DB_SUBNET_SECONDARY_2_ID DbSgId=$DB_SG_SECONDARY_ID SourceDbArn=$SOURCE_DB_ARN
+    - aws cloudformation deploy --template-file cdk.out/RdsStackSecondary.template.json --stack-name RdsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides DbSubnet1Id=$DB_SUBNET_SECONDARY_1_ID DbSubnet2Id=$DB_SUBNET_SECONDARY_2_ID DbSgId=$DB_SG_SECONDARY_ID "DbPassword=$DB_PASSWORD"
   only:
     changes:
       - infra/stacks/rds_stack.py
+
+# ============================================================
+# DR : snapshot du Primary us-east-1 copié vers us-west-2
+# Contournement de la restriction Read Replica cross-region (AWS Student)
+# Déclenchement : planifié (CI/CD > Schedules) ou manuel
+# ============================================================
+replicate-db-snapshot:
+  image: nikolaik/python-nodejs:python3.13-nodejs20
+  stage: deploy-database
+  resource_group: aws-deploy
+  before_script:
+    - pip install awscli --quiet
+  script:
+    - TS=$(date +%Y%m%d-%H%M%S)
+    - SNAP_ID="wordpress-primary-snap-$TS"
+    # 1. Snapshot du Primary
+    - echo "Creation snapshot $SNAP_ID..."
+    - aws rds create-db-snapshot --db-instance-identifier wordpress-rds-primary --db-snapshot-identifier $SNAP_ID --region $AWS_PRIMARY_REGION
+    - aws rds wait db-snapshot-available --db-snapshot-identifier $SNAP_ID --region $AWS_PRIMARY_REGION
+    # 2. Copie cross-region vers us-west-2
+    - echo "Copie vers $AWS_SECONDARY_REGION..."
+    - SRC_ARN="arn:aws:rds:${AWS_PRIMARY_REGION}:${AWS_ACCOUNT_ID}:snapshot:${SNAP_ID}"
+    - aws rds copy-db-snapshot --source-db-snapshot-identifier $SRC_ARN --target-db-snapshot-identifier $SNAP_ID --region $AWS_SECONDARY_REGION
+    - aws rds wait db-snapshot-available --db-snapshot-identifier $SNAP_ID --region $AWS_SECONDARY_REGION
+    - echo "Snapshot $SNAP_ID disponible dans les 2 regions."
+    # 3. Retention : garde les 3 derniers snapshots dans chaque region
+    - |
+      for REGION in $AWS_PRIMARY_REGION $AWS_SECONDARY_REGION; do
+        OLD=$(aws rds describe-db-snapshots --region $REGION --snapshot-type manual \
+          --query "reverse(sort_by(DBSnapshots[?starts_with(DBSnapshotIdentifier, 'wordpress-primary-snap-')], &SnapshotCreateTime))[3:].DBSnapshotIdentifier" \
+          --output text)
+        for S in $OLD; do
+          echo "Suppression ancien snapshot $S dans $REGION"
+          aws rds delete-db-snapshot --db-snapshot-identifier "$S" --region "$REGION"
+        done
+      done
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - when: manual
+      allow_failure: true
