@@ -36,7 +36,9 @@ deploy-sg:
     - export VPC_PRIMARY_ID=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
     - export VPC_SECONDARY_ID=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
     - cdk synth SgStackPrimary SgStackSecondary
+    - aws cloudformation wait stack-update-complete --stack-name SgStackPrimary --region $AWS_PRIMARY_REGION 2>/dev/null || true
     - aws cloudformation deploy --template-file cdk.out/SgStackPrimary.template.json --stack-name SgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - aws cloudformation wait stack-update-complete --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION 2>/dev/null || true
     - aws cloudformation deploy --template-file cdk.out/SgStackSecondary.template.json --stack-name SgStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
