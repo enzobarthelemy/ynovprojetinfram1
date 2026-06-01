@@ -50,9 +50,9 @@ alb_secondary = AlbStackSecondary(app, "AlbStackSecondary", vpc_stack=vpc_second
 alb_secondary.add_dependency(sg_secondary)
 
 # 5. EFS — stockage partagé WordPress avec réplication cross-region
-efs_primary = EfsStackPrimary(app, "EfsStackPrimary", vpc_stack=vpc_primary, sg_stack=sg_primary, env=env_east, synthesizer=synthesizer_east)
+efs_primary = EfsStackPrimary(app, "EfsStackPrimary", env=env_east, synthesizer=synthesizer_east)
 efs_primary.add_dependency(sg_primary)
-efs_secondary = EfsStackSecondary(app, "EfsStackSecondary", vpc_stack=vpc_secondary, sg_stack=sg_secondary, env=env_west, synthesizer=synthesizer_west)
+efs_secondary = EfsStackSecondary(app, "EfsStackSecondary", env=env_west, synthesizer=synthesizer_west)
 efs_secondary.add_dependency(sg_secondary)
 
 # 6. ASG — Auto Scaling Group avec EFS + Secrets Manager

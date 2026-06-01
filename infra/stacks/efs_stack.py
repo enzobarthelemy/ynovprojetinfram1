@@ -1,66 +1,110 @@
-from aws_cdk import (
-    Stack,
-    RemovalPolicy,
-    aws_efs as efs,
-    aws_ec2 as ec2,
-)
+import os
+from aws_cdk import Stack, CfnOutput, CfnParameter, aws_efs as efs
 from constructs import Construct
 
 
 class EfsStackPrimary(Stack):
-    def __init__(self, scope, construct_id: str, vpc_stack, sg_stack, **kwargs) -> None:
+    """
+    EFS Primary en us-east-1 avec réplication vers us-west-2.
+    Utilise L1 pour éviter les problèmes de subnet type avec notre VPC.
+    """
+    def __init__(self, scope, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # vpc_stack.vpc = alias vers vpc_stack.vpc_prod (us-east-1)
-        self.fs = efs.FileSystem(
-            self, "PrimaryEFS",
-            vpc=vpc_stack.vpc,
-            security_group=sg_stack.efs_sg,
-            performance_mode=efs.PerformanceMode.GENERAL_PURPOSE,
-            throughput_mode=efs.ThroughputMode.BURSTING,
-            lifecycle_policy=efs.LifecyclePolicy.AFTER_30_DAYS,
-            out_of_infrequent_access_policy=efs.OutOfInfrequentAccessPolicy.AFTER_1_ACCESS,
+        web_subnet_1 = CfnParameter(self, "WebSubnet1Id", type="String").value_as_string
+        web_subnet_2 = CfnParameter(self, "WebSubnet2Id", type="String").value_as_string
+        efs_sg_id    = CfnParameter(self, "EfsSgId", type="String").value_as_string
+
+        # FileSystem EFS chiffré
+        fs = efs.CfnFileSystem(self, "PrimaryEFS",
             encrypted=True,
-            vpc_subnets=ec2.SubnetSelection(
-                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+            performance_mode="generalPurpose",
+            throughput_mode="bursting",
+            lifecycle_policies=[
+                efs.CfnFileSystem.LifecyclePolicyProperty(
+                    transition_to_ia="AFTER_30_DAYS",
+                ),
+                efs.CfnFileSystem.LifecyclePolicyProperty(
+                    transition_to_primary_storage_class="AFTER_1_ACCESS",
+                ),
+            ],
+            replication_configuration=efs.CfnFileSystem.ReplicationConfigurationProperty(
+                destinations=[
+                    efs.CfnFileSystem.ReplicationDestinationProperty(
+                        region="us-west-2",
+                    )
+                ]
             ),
-            removal_policy=RemovalPolicy.RETAIN,
         )
 
-        # Access point WordPress (UID/GID 33 = www-data)
-        self.access_point = self.fs.add_access_point(
-            "WordpressAccessPoint",
-            path="/wordpress",
-            create_acl=efs.Acl(owner_uid="33", owner_gid="33", permissions="755"),
-            posix_user=efs.PosixUser(uid="33", gid="33"),
+        # Mount targets dans chaque subnet privé web
+        efs.CfnMountTarget(self, "MountTarget1",
+            file_system_id=fs.ref,
+            subnet_id=web_subnet_1,
+            security_groups=[efs_sg_id],
+        )
+        efs.CfnMountTarget(self, "MountTarget2",
+            file_system_id=fs.ref,
+            subnet_id=web_subnet_2,
+            security_groups=[efs_sg_id],
         )
 
-        # Réplication vers us-west-2
-        cfn_fs = self.fs.node.default_child
-        cfn_fs.replication_configuration = {
-            "destinations": [{"region": "us-west-2"}]
-        }
+        # Access Point WordPress (UID/GID 33 = www-data)
+        efs.CfnAccessPoint(self, "WordpressAccessPoint",
+            file_system_id=fs.ref,
+            root_directory=efs.CfnAccessPoint.RootDirectoryProperty(
+                path="/wordpress",
+                creation_info=efs.CfnAccessPoint.CreationInfoProperty(
+                    owner_uid="33",
+                    owner_gid="33",
+                    permissions="755",
+                ),
+            ),
+            posix_user=efs.CfnAccessPoint.PosixUserProperty(uid="33", gid="33"),
+        )
+
+        self.file_system_id = fs.ref
+
+        CfnOutput(self, "EfsId", value=fs.ref)
 
 
 class EfsStackSecondary(Stack):
-    def __init__(self, scope, construct_id: str, vpc_stack, sg_stack, **kwargs) -> None:
+    """
+    EFS Secondary en us-west-2.
+    Le FileSystem est créé automatiquement par la réplication depuis Primary.
+    Ce stack crée uniquement les mount targets et l'access point.
+    Nécessite EFS_SECONDARY_ID dans les variables GitLab CI après le premier déploiement Primary.
+    """
+    def __init__(self, scope, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        import os
-        secondary_fs_id = os.environ.get("EFS_SECONDARY_ID", "fs-PLACEHOLDER")
+        web_subnet_1      = CfnParameter(self, "WebSubnet1Id", type="String").value_as_string
+        web_subnet_2      = CfnParameter(self, "WebSubnet2Id", type="String").value_as_string
+        efs_sg_id         = CfnParameter(self, "EfsSgId", type="String").value_as_string
+        secondary_fs_id   = CfnParameter(self, "EfsSecondaryId", type="String").value_as_string
 
-        # Le FS secondaire est créé automatiquement par la réplication EFS Primary
-        # EFS_SECONDARY_ID doit être renseigné dans les variables GitLab CI
-        # après le premier déploiement du Primary
-        self.fs = efs.FileSystem.from_file_system_attributes(
-            self, "SecondaryEFS",
+        efs.CfnMountTarget(self, "MountTarget1",
             file_system_id=secondary_fs_id,
-            security_group=sg_stack.efs_sg,
+            subnet_id=web_subnet_1,
+            security_groups=[efs_sg_id],
+        )
+        efs.CfnMountTarget(self, "MountTarget2",
+            file_system_id=secondary_fs_id,
+            subnet_id=web_subnet_2,
+            security_groups=[efs_sg_id],
         )
 
-        self.access_point = self.fs.add_access_point(
-            "WordpressAccessPoint",
-            path="/wordpress",
-            create_acl=efs.Acl(owner_uid="33", owner_gid="33", permissions="755"),
-            posix_user=efs.PosixUser(uid="33", gid="33"),
+        efs.CfnAccessPoint(self, "WordpressAccessPoint",
+            file_system_id=secondary_fs_id,
+            root_directory=efs.CfnAccessPoint.RootDirectoryProperty(
+                path="/wordpress",
+                creation_info=efs.CfnAccessPoint.CreationInfoProperty(
+                    owner_uid="33",
+                    owner_gid="33",
+                    permissions="755",
+                ),
+            ),
+            posix_user=efs.CfnAccessPoint.PosixUserProperty(uid="33", gid="33"),
         )
+
+        CfnOutput(self, "EfsSecondaryId", value=secondary_fs_id)

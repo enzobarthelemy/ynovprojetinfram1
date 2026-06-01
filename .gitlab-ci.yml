@@ -120,12 +120,19 @@ deploy-efs-primary:
   extends: .base
   stage: deploy-efs
   script:
+    - export WEB_SUBNET_PRIMARY_1=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet1Id'].OutputValue" --output text)
+    - export WEB_SUBNET_PRIMARY_2=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet2Id'].OutputValue" --output text)
+    - export EFS_SG_PRIMARY=$(aws cloudformation describe-stacks --stack-name SgStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsSgId'].OutputValue" --output text)
     - cdk synth EfsStackPrimary
-    - aws cloudformation deploy --template-file cdk.out/EfsStackPrimary.template.json --stack-name EfsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
-    - |
-      echo "==> ID du FileSystem replique en us-west-2 :"
-      aws efs describe-replication-configurations --region $AWS_PRIMARY_REGION \
-        --query "Replications[0].Destinations[0].FileSystemId" --output text
+    - aws cloudformation deploy --template-file cdk.out/EfsStackPrimary.template.json --stack-name EfsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides WebSubnet1Id=$WEB_SUBNET_PRIMARY_1 WebSubnet2Id=$WEB_SUBNET_PRIMARY_2 EfsSgId=$EFS_SG_PRIMARY
+    # Attendre que la réplication soit initialisée puis sauvegarder l'ID dans un artifact
+    - sleep 30
+    - aws efs describe-replication-configurations --region $AWS_PRIMARY_REGION --query "Replications[0].Destinations[0].FileSystemId" --output text > efs_secondary_id.txt
+    - echo "EFS Secondary ID = $(cat efs_secondary_id.txt)"
+  artifacts:
+    paths:
+      - efs_secondary_id.txt
+    expire_in: 1 hour
   only:
     changes:
       - infra/stacks/efs_stack.py
@@ -134,10 +141,15 @@ deploy-efs-secondary:
   extends: .base
   stage: deploy-efs
   needs:
-    - deploy-efs-primary
+    - job: deploy-efs-primary
+      artifacts: true
   script:
+    - export EFS_SECONDARY_ID=$(cat efs_secondary_id.txt)
+    - export WEB_SUBNET_SECONDARY_1=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet1Id'].OutputValue" --output text)
+    - export WEB_SUBNET_SECONDARY_2=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet2Id'].OutputValue" --output text)
+    - export EFS_SG_SECONDARY=$(aws cloudformation describe-stacks --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsSgId'].OutputValue" --output text)
     - cdk synth EfsStackSecondary
-    - aws cloudformation deploy --template-file cdk.out/EfsStackSecondary.template.json --stack-name EfsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/EfsStackSecondary.template.json --stack-name EfsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides WebSubnet1Id=$WEB_SUBNET_SECONDARY_1 WebSubnet2Id=$WEB_SUBNET_SECONDARY_2 EfsSgId=$EFS_SG_SECONDARY EfsSecondaryId=$EFS_SECONDARY_ID
   only:
     changes:
       - infra/stacks/efs_stack.py
