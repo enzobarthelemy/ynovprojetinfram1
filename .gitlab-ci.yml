@@ -1,4 +1,6 @@
 stages:
+  - deploy-network
+  - deploy-security
   - deploy
   - deploy-s3-primary
 
@@ -17,7 +19,7 @@ variables:
 
 deploy-vpc:
   extends: .base
-  stage: deploy
+  stage: deploy-network
   script:
     - cdk synth VpcStackPrimary VpcStackSecondary
     - aws cloudformation deploy --template-file cdk.out/VpcStackPrimary.template.json --stack-name VpcStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
@@ -28,7 +30,7 @@ deploy-vpc:
 
 deploy-sg:
   extends: .base
-  stage: deploy
+  stage: deploy-security
   script:
     - export VPC_PRIMARY_ID=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
     - export VPC_SECONDARY_ID=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
