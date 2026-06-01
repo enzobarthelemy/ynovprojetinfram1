@@ -1,12 +1,11 @@
 stages:
-  - deploy-network      # VPC
-  - deploy-security     # Security Groups
-  - deploy-database     # RDS Primary + Read Replica
-  - deploy-storage      # EFS + S3 secondary
+  - deploy-network      # VPC + S3 secondary (independants)
+  - deploy-security     # Security Groups + S3 primary (CRR)
+  - deploy-database     # RDS Primary + Secondary
+  - deploy-storage      # EFS
   - deploy-secrets      # Secrets Manager (lit endpoint RDS)
   - deploy-loadbalancer # ALB (avant ASG car ASG importe target_group_arn)
   - deploy-compute      # EC2 + ASG (dependent de ALB, EFS, secrets)
-  - deploy-s3-primary   # S3 primary (CRR depuis secondary)
 
 variables:
   AWS_DEFAULT_REGION: us-east-1
@@ -28,8 +27,9 @@ variables:
         local NAME="$1"; local REGION="$2"
         local STATUS
         STATUS=$(aws cloudformation describe-stacks --stack-name "$NAME" --region "$REGION" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NONE")
-        if [ "$STATUS" = "ROLLBACK_COMPLETE" ]; then
-          echo "Stack $NAME en ROLLBACK_COMPLETE -> suppression avant redeploiement"
+        # Etats non-recuperables : CloudFormation refuse l'update, il faut supprimer d'abord
+        if [ "$STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STATUS" = "REVIEW_IN_PROGRESS" ]; then
+          echo "Stack $NAME en $STATUS -> suppression avant redeploiement"
           aws cloudformation delete-stack --stack-name "$NAME" --region "$REGION"
           aws cloudformation wait stack-delete-complete --stack-name "$NAME" --region "$REGION"
         fi
@@ -142,10 +142,24 @@ deploy-efs-primary:
     - cdk synth EfsStackPrimary
     - clean_rollback EfsStackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/EfsStackPrimary.template.json --stack-name EfsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides WebSubnet1Id=$WEB_SUBNET_PRIMARY_1 WebSubnet2Id=$WEB_SUBNET_PRIMARY_2 EfsSgId=$EFS_SG_PRIMARY
-    # Attendre que la réplication soit initialisée puis sauvegarder l'ID dans un artifact
-    - sleep 30
-    - aws efs describe-replication-configurations --region $AWS_PRIMARY_REGION --query "Replications[0].Destinations[0].FileSystemId" --output text > efs_secondary_id.txt
-    - echo "EFS Secondary ID = $(cat efs_secondary_id.txt)"
+    # Poll jusqu'à ce que le FS répliqué en us-west-2 soit provisionné (ID disponible)
+    - |
+      echo "Attente provisioning du FS replique en $AWS_SECONDARY_REGION..."
+      rm -f efs_secondary_id.txt
+      for i in $(seq 1 30); do
+        DEST_ID=$(aws efs describe-replication-configurations --region $AWS_PRIMARY_REGION --query "Replications[0].Destinations[0].FileSystemId" --output text 2>/dev/null || echo "")
+        if [ -n "$DEST_ID" ] && [ "$DEST_ID" != "None" ]; then
+          echo "FS replique : $DEST_ID"
+          echo "$DEST_ID" > efs_secondary_id.txt
+          break
+        fi
+        echo "  pas encore pret (tentative $i/30), attente 20s..."
+        sleep 20
+      done
+      if [ ! -s efs_secondary_id.txt ]; then
+        echo "ERREUR: FS replique non disponible apres 10 min"
+        exit 1
+      fi
   artifacts:
     paths:
       - efs_secondary_id.txt
@@ -162,6 +176,15 @@ deploy-efs-secondary:
       artifacts: true
   script:
     - export EFS_SECONDARY_ID=$(cat efs_secondary_id.txt)
+    - echo "EFS Secondary ID = $EFS_SECONDARY_ID"
+    # Attendre que le FS répliqué soit 'available' avant de créer les mount targets
+    - |
+      for i in $(seq 1 30); do
+        STATE=$(aws efs describe-file-systems --file-system-id "$EFS_SECONDARY_ID" --region $AWS_SECONDARY_REGION --query "FileSystems[0].LifeCycleState" --output text 2>/dev/null || echo "")
+        echo "  etat FS: $STATE (tentative $i/30)"
+        [ "$STATE" = "available" ] && break
+        sleep 20
+      done
     - export WEB_SUBNET_SECONDARY_1=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet1Id'].OutputValue" --output text)
     - export WEB_SUBNET_SECONDARY_2=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet2Id'].OutputValue" --output text)
     - export EFS_SG_SECONDARY=$(aws cloudformation describe-stacks --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsSgId'].OutputValue" --output text)
@@ -174,9 +197,10 @@ deploy-efs-secondary:
 
 deploy-s3-secondary:
   extends: .base
-  stage: deploy-storage
+  stage: deploy-network
   script:
     - cdk synth S3StackSecondary
+    - clean_rollback S3StackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation deploy --template-file cdk.out/S3StackSecondary.template.json --stack-name S3StackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
@@ -184,9 +208,10 @@ deploy-s3-secondary:
 
 deploy-s3-primary:
   extends: .base
-  stage: deploy-s3-primary
+  stage: deploy-security
   script:
     - cdk synth S3StackPrimary
+    - clean_rollback S3StackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/S3StackPrimary.template.json --stack-name S3StackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
   only:
     changes:
