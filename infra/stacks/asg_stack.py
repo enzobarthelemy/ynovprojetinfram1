@@ -85,6 +85,11 @@ class AsgStackPrimary(Stack):
             target_group_arns=[alb_stack.target_group_arn],
             health_check_type="ELB",
             health_check_grace_period=300,
+            # Politique de maintenance : zero interruption lors des remplacements d'instances
+            instance_maintenance_policy=autoscaling.CfnAutoScalingGroup.InstanceMaintenancePolicyProperty(
+                min_healthy_percentage=100,  # garde 100% de la capacite active
+                max_healthy_percentage=200,  # double temporairement (nouveau avant de couper l'ancien)
+            ),
             tags=[
                 autoscaling.CfnAutoScalingGroup.TagPropertyProperty(
                     key="Name", value="wordpress-asg-primary", propagate_at_launch=True
@@ -191,6 +196,11 @@ class AsgStackSecondary(Stack):
             target_group_arns=[alb_stack.target_group_arn],
             health_check_type="ELB",
             health_check_grace_period=300,
+            # Politique de maintenance : zero interruption lors des remplacements d'instances
+            instance_maintenance_policy=autoscaling.CfnAutoScalingGroup.InstanceMaintenancePolicyProperty(
+                min_healthy_percentage=100,
+                max_healthy_percentage=200,
+            ),
             tags=[
                 autoscaling.CfnAutoScalingGroup.TagPropertyProperty(
                     key="Name", value="wordpress-asg-secondary", propagate_at_launch=True
