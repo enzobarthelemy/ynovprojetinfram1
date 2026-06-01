@@ -17,8 +17,8 @@ EFS_MOUNT="/mnt/efs/wordpress"
 # ============================================================
 # 1. Packages système
 # ============================================================
-dnf update -y
-dnf install -y docker amazon-efs-utils jq aws-cli
+yum update -y
+yum install -y docker amazon-efs-utils jq aws-cli
 
 # docker-compose v2 plugin
 mkdir -p /usr/local/lib/docker/cli-plugins
