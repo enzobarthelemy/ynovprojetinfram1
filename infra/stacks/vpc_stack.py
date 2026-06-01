@@ -5,6 +5,7 @@ from aws_cdk import (
 )
 from constructs import Construct
 
+# v2 - ajout outputs subnets
 class VpcStackPrimary(Stack):
 
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
