@@ -185,9 +185,25 @@ deploy-efs-secondary:
     - job: deploy-efs-primary
       artifacts: true
   script:
-    - export EFS_SECONDARY_ID=$(cat efs_secondary_id.txt)
-    - echo "EFS Secondary ID = $EFS_SECONDARY_ID"
-    # Attendre que le FS répliqué soit 'available' avant de créer les mount targets
+    # Récupère l'ID du FS répliqué directement depuis la config de réplication (auto-suffisant)
+    - |
+      echo "Recuperation de l'ID du FS replique..."
+      EFS_SECONDARY_ID=""
+      for i in $(seq 1 30); do
+        EFS_SECONDARY_ID=$(aws efs describe-replication-configurations --region $AWS_PRIMARY_REGION --query "Replications[0].Destinations[0].FileSystemId" --output text 2>/dev/null || echo "")
+        if [ -n "$EFS_SECONDARY_ID" ] && [ "$EFS_SECONDARY_ID" != "None" ]; then
+          break
+        fi
+        echo "  ID pas encore disponible (tentative $i/30), attente 20s..."
+        sleep 20
+      done
+      if [ -z "$EFS_SECONDARY_ID" ] || [ "$EFS_SECONDARY_ID" = "None" ]; then
+        echo "ERREUR: ID du FS replique introuvable"
+        exit 1
+      fi
+      export EFS_SECONDARY_ID
+      echo "EFS Secondary ID = $EFS_SECONDARY_ID"
+    # Attendre que le FS répliqué soit 'available' dans us-west-2 avant les mount targets
     - |
       for i in $(seq 1 30); do
         STATE=$(aws efs describe-file-systems --file-system-id "$EFS_SECONDARY_ID" --region $AWS_SECONDARY_REGION --query "FileSystems[0].LifeCycleState" --output text 2>/dev/null || echo "")
