@@ -41,12 +41,10 @@ class AsgStackPrimary(Stack):
         launch_template = ec2.LaunchTemplate(
             self, "PrimaryLaunchTemplate",
             instance_type=ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.SMALL),
-            machine_image=ec2.MachineImage.latest_amazon_linux(
-                generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2023,
-            ),
+            machine_image=ec2.MachineImage.latest_amazon_linux2(),
             security_group=sg_stack.asg_sg,
             role=lab_role,
-            user_data=_load_user_data(efs_stack.fs.file_system_id, secret_db_name, secret_wp_name),
+            user_data=_load_user_data(efs_stack.file_system_id, secret_db_name, secret_wp_name),
             associate_public_ip_address=False,
             block_devices=[
                 ec2.BlockDevice(
@@ -68,8 +66,6 @@ class AsgStackPrimary(Stack):
         )
 
         self.asg.attach_to_application_target_group(alb_stack.target_group)
-        efs_stack.fs.grant_root_access(self.asg.role)
-        efs_stack.fs.connections.allow_default_port_from(self.asg)
 
         self.asg.scale_on_cpu_utilization(
             "TargetTrackingCPU", target_utilization_percent=70, cooldown=Duration.seconds(120),
@@ -105,12 +101,10 @@ class AsgStackSecondary(Stack):
         launch_template = ec2.LaunchTemplate(
             self, "SecondaryLaunchTemplate",
             instance_type=ec2.InstanceType.of(ec2.InstanceClass.T3, ec2.InstanceSize.SMALL),
-            machine_image=ec2.MachineImage.latest_amazon_linux(
-                generation=ec2.AmazonLinuxGeneration.AMAZON_LINUX_2023,
-            ),
+            machine_image=ec2.MachineImage.latest_amazon_linux2(),
             security_group=sg_stack.asg_sg,
             role=lab_role,
-            user_data=_load_user_data(efs_stack.fs.file_system_id, secret_db_name, secret_wp_name),
+            user_data=_load_user_data(efs_stack.file_system_id, secret_db_name, secret_wp_name),
             associate_public_ip_address=False,
             block_devices=[
                 ec2.BlockDevice(
@@ -132,8 +126,6 @@ class AsgStackSecondary(Stack):
         )
 
         self.asg.attach_to_application_target_group(alb_stack.target_group)
-        efs_stack.fs.grant_root_access(self.asg.role)
-        efs_stack.fs.connections.allow_default_port_from(self.asg)
 
         self.asg.scale_on_cpu_utilization(
             "TargetTrackingCPU", target_utilization_percent=70, cooldown=Duration.seconds(120),
