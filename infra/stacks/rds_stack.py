@@ -1,5 +1,5 @@
 import os
-from aws_cdk import Stack, CfnOutput, aws_rds as rds
+from aws_cdk import Stack, CfnOutput, CfnParameter, aws_rds as rds
 from constructs import Construct
 
 
@@ -7,10 +7,10 @@ class RdsStackPrimary(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        db_subnet_1 = os.getenv("DB_SUBNET_PRIMARY_1_ID")
-        db_subnet_2 = os.getenv("DB_SUBNET_PRIMARY_2_ID")
-        db_sg_id    = os.getenv("DB_SG_PRIMARY_ID")
-        db_password = os.getenv("DB_PASSWORD")
+        db_subnet_1 = CfnParameter(self, "DbSubnet1Id", type="String").value_as_string
+        db_subnet_2 = CfnParameter(self, "DbSubnet2Id", type="String").value_as_string
+        db_sg_id    = CfnParameter(self, "DbSgId", type="String").value_as_string
+        db_password = CfnParameter(self, "DbPassword", type="String", no_echo=True).value_as_string
 
         # Subnet group couvrant les 2 AZ (us-east-1a + us-east-1b)
         subnet_group = rds.CfnDBSubnetGroup(self, "RdsSubnetGroupPrimary",
@@ -47,10 +47,10 @@ class RdsStackSecondary(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        db_subnet_1 = os.getenv("DB_SUBNET_SECONDARY_1_ID")
-        db_subnet_2 = os.getenv("DB_SUBNET_SECONDARY_2_ID")
-        db_sg_id    = os.getenv("DB_SG_SECONDARY_ID")
-        db_password = os.getenv("DB_PASSWORD")
+        db_subnet_1 = CfnParameter(self, "DbSubnet1Id", type="String").value_as_string
+        db_subnet_2 = CfnParameter(self, "DbSubnet2Id", type="String").value_as_string
+        db_sg_id    = CfnParameter(self, "DbSgId", type="String").value_as_string
+        db_password = CfnParameter(self, "DbPassword", type="String", no_echo=True).value_as_string
 
         # Subnet group couvrant les 2 AZ (us-west-2a + us-west-2b)
         subnet_group = rds.CfnDBSubnetGroup(self, "RdsSubnetGroupSecondary",

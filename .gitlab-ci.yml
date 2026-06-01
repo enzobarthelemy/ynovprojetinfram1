@@ -109,8 +109,8 @@ deploy-rds:
     - export DB_SG_PRIMARY_ID=$(aws cloudformation describe-stacks --stack-name SgStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSgId'].OutputValue" --output text)
     - export DB_SG_SECONDARY_ID=$(aws cloudformation describe-stacks --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSgId'].OutputValue" --output text)
     - cdk synth RdsStackPrimary RdsStackSecondary
-    - aws cloudformation deploy --template-file cdk.out/RdsStackPrimary.template.json --stack-name RdsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
-    - aws cloudformation deploy --template-file cdk.out/RdsStackSecondary.template.json --stack-name RdsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/RdsStackPrimary.template.json --stack-name RdsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides DbSubnet1Id=$DB_SUBNET_PRIMARY_1_ID DbSubnet2Id=$DB_SUBNET_PRIMARY_2_ID DbSgId=$DB_SG_PRIMARY_ID DbPassword=$DB_PASSWORD
+    - aws cloudformation deploy --template-file cdk.out/RdsStackSecondary.template.json --stack-name RdsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides DbSubnet1Id=$DB_SUBNET_SECONDARY_1_ID DbSubnet2Id=$DB_SUBNET_SECONDARY_2_ID DbSgId=$DB_SG_SECONDARY_ID DbPassword=$DB_PASSWORD
   only:
     changes:
       - infra/stacks/rds_stack.py
