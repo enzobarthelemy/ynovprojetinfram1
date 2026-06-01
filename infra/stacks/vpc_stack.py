@@ -80,6 +80,8 @@ class VpcStackPrimary(Stack):
             cidr_block="10.0.22.0/24"
         )
 
+        self.vpc = self.vpc_prod
+
         CfnOutput(self, "VpcId", value=self.vpc_prod.vpc_id)
         CfnOutput(self, "DbSubnet1Id", value=sub_private_3_prod.subnet_id)
         CfnOutput(self, "DbSubnet2Id", value=sub_private_4_prod.subnet_id)
@@ -162,6 +164,8 @@ class VpcStackSecondary(Stack):
             availability_zone="us-west-2b",
             cidr_block="10.1.22.0/24"
         )
+
+        self.vpc = self.vpc_backup
 
         CfnOutput(self, "VpcId", value=self.vpc_backup.vpc_id)
         CfnOutput(self, "DbSubnet1Id", value=sub_private_3_backup.subnet_id)

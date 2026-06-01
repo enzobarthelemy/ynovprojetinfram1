@@ -50,9 +50,36 @@ class SgStackPrimary(Stack):
             tags=[{"key": "Name", "value": "SG-DB-Primary"}],
         )
 
+        # SG-EFS : NFS 2049 depuis SG-Web uniquement
+        self.efs_sg = ec2.CfnSecurityGroup(self, "SgEfs",
+            vpc_id=vpc_id,
+            group_description="SG-EFS: NFS 2049 depuis SG-Web uniquement",
+            security_group_ingress=[
+                ec2.CfnSecurityGroup.IngressProperty(
+                    ip_protocol="tcp", from_port=2049, to_port=2049,
+                    source_security_group_id=self.web_sg.ref,
+                ),
+            ],
+            tags=[{"key": "Name", "value": "SG-EFS-Primary"}],
+        )
+
+        # Egress NFS depuis SG-Web vers SG-EFS
+        ec2.CfnSecurityGroupEgress(self, "WebToEfsEgress",
+            group_id=self.web_sg.ref,
+            ip_protocol="tcp",
+            from_port=2049,
+            to_port=2049,
+            destination_security_group_id=self.efs_sg.ref,
+            description="NFS sortant vers EFS",
+        )
+
+        # Alias pour compatibilité asg_stack
+        self.asg_sg = self.web_sg
+
         CfnOutput(self, "AlbSgId", value=self.alb_sg.ref)
         CfnOutput(self, "WebSgId", value=self.web_sg.ref)
         CfnOutput(self, "DbSgId", value=self.rds_sg.ref)
+        CfnOutput(self, "EfsSgId", value=self.efs_sg.ref)
 
 
 class SgStackSecondary(Stack):
@@ -102,6 +129,31 @@ class SgStackSecondary(Stack):
             tags=[{"key": "Name", "value": "SG-DB-Secondary"}],
         )
 
+        # SG-EFS
+        self.efs_sg = ec2.CfnSecurityGroup(self, "SgEfs",
+            vpc_id=vpc_id,
+            group_description="SG-EFS: NFS 2049 depuis SG-Web uniquement",
+            security_group_ingress=[
+                ec2.CfnSecurityGroup.IngressProperty(
+                    ip_protocol="tcp", from_port=2049, to_port=2049,
+                    source_security_group_id=self.web_sg.ref,
+                ),
+            ],
+            tags=[{"key": "Name", "value": "SG-EFS-Secondary"}],
+        )
+
+        ec2.CfnSecurityGroupEgress(self, "WebToEfsEgress",
+            group_id=self.web_sg.ref,
+            ip_protocol="tcp",
+            from_port=2049,
+            to_port=2049,
+            destination_security_group_id=self.efs_sg.ref,
+            description="NFS sortant vers EFS",
+        )
+
+        self.asg_sg = self.web_sg
+
         CfnOutput(self, "AlbSgId", value=self.alb_sg.ref)
         CfnOutput(self, "WebSgId", value=self.web_sg.ref)
         CfnOutput(self, "DbSgId", value=self.rds_sg.ref)
+        CfnOutput(self, "EfsSgId", value=self.efs_sg.ref)

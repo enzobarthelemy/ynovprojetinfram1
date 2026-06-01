@@ -1,0 +1,142 @@
+#!/bin/bash
+set -euo pipefail
+exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
+
+# ============================================================
+# CONFIG — à adapter ou passer via variables CDK/SSM
+# ============================================================
+SECRET_DB="prod/wordpress/db"
+SECRET_WP="prod/wordpress/app"
+EFS_ID="${EFS_ID}"                  # injecté par CDK au synth
+WP_SITE_URL="https://example.com"   # à adapter
+
+AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+COMPOSE_DIR="/opt/wordpress"
+EFS_MOUNT="/mnt/efs/wordpress"
+
+# ============================================================
+# 1. Packages système
+# ============================================================
+dnf update -y
+dnf install -y docker amazon-efs-utils jq aws-cli
+
+# docker-compose v2 plugin
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+systemctl enable --now docker
+
+# ============================================================
+# 2. Montage EFS (avant Docker — WordPress écrira directement ici)
+# ============================================================
+mkdir -p "$EFS_MOUNT"
+
+# Montage via amazon-efs-utils (TLS + retry automatique)
+mount -t efs -o tls,_netdev "$EFS_ID":/ "$EFS_MOUNT"
+
+# Persistance au reboot
+if ! grep -q "$EFS_ID" /etc/fstab; then
+  echo "$EFS_ID:/ $EFS_MOUNT efs _netdev,tls 0 0" >> /etc/fstab
+fi
+
+# Droits www-data (UID 33 = user WordPress dans le container officiel)
+chown -R 33:33 "$EFS_MOUNT"
+chmod 755 "$EFS_MOUNT"
+
+# ============================================================
+# 3. Récupération des secrets
+# ============================================================
+fetch_secret() {
+  aws secretsmanager get-secret-value \
+    --region "$AWS_REGION" \
+    --secret-id "$1" \
+    --query SecretString \
+    --output text
+}
+
+DB_SECRET=$(fetch_secret "$SECRET_DB")
+WP_SECRET=$(fetch_secret "$SECRET_WP")
+
+DB_HOST=$(echo "$DB_SECRET"     | jq -r '.host')
+DB_PORT=$(echo "$DB_SECRET"     | jq -r '.port')
+DB_NAME=$(echo "$DB_SECRET"     | jq -r '.name')
+DB_USER=$(echo "$DB_SECRET"     | jq -r '.username')
+DB_PASS=$(echo "$DB_SECRET"     | jq -r '.password')
+
+WP_ADMIN_USER=$(echo "$WP_SECRET"  | jq -r '.admin_user')
+WP_ADMIN_PASS=$(echo "$WP_SECRET"  | jq -r '.admin_password')
+WP_ADMIN_EMAIL=$(echo "$WP_SECRET" | jq -r '.admin_email')
+
+# ============================================================
+# 4. docker-compose.yml
+#    Bind mount EFS → /var/www/html : aucun fichier WP sur l'instance
+# ============================================================
+mkdir -p "$COMPOSE_DIR"
+cat > "$COMPOSE_DIR/docker-compose.yml" << EOF
+version: "3.9"
+
+services:
+  wordpress:
+    image: wordpress:latest
+    restart: always
+    ports:
+      - "80:80"
+    environment:
+      WORDPRESS_DB_HOST: "${DB_HOST}:${DB_PORT}"
+      WORDPRESS_DB_NAME: "${DB_NAME}"
+      WORDPRESS_DB_USER: "${DB_USER}"
+      WORDPRESS_DB_PASSWORD: "${DB_PASS}"
+      WORDPRESS_TABLE_PREFIX: "wp_"
+    volumes:
+      # Bind mount EFS — tous les fichiers WP vivent sur EFS, pas sur l'instance
+      - ${EFS_MOUNT}:/var/www/html
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+EOF
+
+chmod 600 "$COMPOSE_DIR/docker-compose.yml"
+
+# ============================================================
+# 5. Démarrage
+# ============================================================
+cd "$COMPOSE_DIR"
+docker compose up -d
+
+# ============================================================
+# 6. WP-CLI : installation WordPress + WooCommerce (idempotent)
+#    Skippé sur la région secondaire (EFS en lecture seule)
+# ============================================================
+WP_CLI="docker compose exec -T wordpress wp --allow-root"
+
+echo "Attente démarrage WordPress..."
+until docker compose exec -T wordpress curl -sf http://localhost > /dev/null 2>&1; do
+  sleep 5
+done
+
+if ! $WP_CLI core is-installed 2>/dev/null; then
+  echo "Installation WordPress..."
+  $WP_CLI core install \
+    --url="$WP_SITE_URL" \
+    --title="My Store" \
+    --admin_user="$WP_ADMIN_USER" \
+    --admin_password="$WP_ADMIN_PASS" \
+    --admin_email="$WP_ADMIN_EMAIL" \
+    --skip-email
+fi
+
+if ! $WP_CLI plugin is-installed woocommerce 2>/dev/null; then
+  echo "Installation WooCommerce..."
+  $WP_CLI plugin install woocommerce --activate
+else
+  $WP_CLI plugin activate woocommerce
+fi
+
+$WP_CLI rewrite flush
+
+echo "===> User data terminé avec succès."

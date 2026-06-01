@@ -1,7 +1,9 @@
 stages:
   - deploy-network
   - deploy-security
+  - check-secrets
   - deploy
+  - deploy-efs
   - deploy-s3-primary
 
 variables:
@@ -44,6 +46,39 @@ deploy-sg:
     changes:
       - infra/stacks/sg_stack.py
 
+check-secrets:
+  image: nikolaik/python-nodejs:python3.13-nodejs20
+  stage: check-secrets
+  before_script:
+    - pip install awscli --quiet
+  script:
+    - |
+      SECRETS=("prod/wordpress/db" "prod/wordpress/app")
+      REGIONS=("$AWS_PRIMARY_REGION" "$AWS_SECONDARY_REGION")
+      MISSING=0
+      for REGION in "${REGIONS[@]}"; do
+        for SECRET in "${SECRETS[@]}"; do
+          aws secretsmanager describe-secret \
+            --secret-id "$SECRET" \
+            --region "$REGION" \
+            --query "Name" \
+            --output text > /dev/null 2>&1 \
+          && echo "OK  [$REGION] $SECRET" \
+          || { echo "MANQUANT  [$REGION] $SECRET"; MISSING=1; }
+        done
+      done
+      if [ $MISSING -eq 1 ]; then
+        echo ""
+        echo "Des secrets sont manquants. Creez-les avec :"
+        echo "  aws secretsmanager create-secret --name prod/wordpress/db --region <REGION> --secret-string '{\"host\":\"...\",\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"...\",\"password\":\"...\"}'"
+        echo "  aws secretsmanager create-secret --name prod/wordpress/app --region <REGION> --secret-string '{\"admin_user\":\"...\",\"admin_password\":\"...\",\"admin_email\":\"...\"}'"
+        exit 1
+      fi
+  only:
+    changes:
+      - infra/stacks/asg_stack.py
+      - infra/scripts/user_data.sh
+
 deploy-ec2:
   extends: .base
   stage: deploy
@@ -70,6 +105,8 @@ deploy-alb:
 deploy-asg:
   extends: .base
   stage: deploy
+  needs:
+    - check-secrets
   script:
     - cdk synth AsgStackPrimary AsgStackSecondary
     - aws cloudformation deploy --template-file cdk.out/AsgStackPrimary.template.json --stack-name AsgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
@@ -77,8 +114,34 @@ deploy-asg:
   only:
     changes:
       - infra/stacks/asg_stack.py
+      - infra/scripts/user_data.sh
 
-# S3 Secondary en us-west-2 d'abord (requis pour la Cross-Region Replication)
+deploy-efs-primary:
+  extends: .base
+  stage: deploy-efs
+  script:
+    - cdk synth EfsStackPrimary
+    - aws cloudformation deploy --template-file cdk.out/EfsStackPrimary.template.json --stack-name EfsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - |
+      echo "==> ID du FileSystem replique en us-west-2 :"
+      aws efs describe-replication-configurations --region $AWS_PRIMARY_REGION \
+        --query "Replications[0].Destinations[0].FileSystemId" --output text
+  only:
+    changes:
+      - infra/stacks/efs_stack.py
+
+deploy-efs-secondary:
+  extends: .base
+  stage: deploy-efs
+  needs:
+    - deploy-efs-primary
+  script:
+    - cdk synth EfsStackSecondary
+    - aws cloudformation deploy --template-file cdk.out/EfsStackSecondary.template.json --stack-name EfsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
+  only:
+    changes:
+      - infra/stacks/efs_stack.py
+
 deploy-s3-secondary:
   extends: .base
   stage: deploy
@@ -89,7 +152,6 @@ deploy-s3-secondary:
     changes:
       - infra/stacks/s3_stack.py
 
-# S3 Primary en us-east-1 après le secondary (Cross-Region Replication)
 deploy-s3-primary:
   extends: .base
   stage: deploy-s3-primary
@@ -111,11 +173,8 @@ deploy-rds:
     - export DB_SG_PRIMARY_ID=$(aws cloudformation describe-stacks --stack-name SgStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSgId'].OutputValue" --output text)
     - export DB_SG_SECONDARY_ID=$(aws cloudformation describe-stacks --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSgId'].OutputValue" --output text)
     - cdk synth RdsStackPrimary RdsStackSecondary
-    # Déploiement Primary Multi-AZ (us-east-1a primary + us-east-1b standby)
     - aws cloudformation deploy --template-file cdk.out/RdsStackPrimary.template.json --stack-name RdsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides DbSubnet1Id=$DB_SUBNET_PRIMARY_1_ID DbSubnet2Id=$DB_SUBNET_PRIMARY_2_ID DbSgId=$DB_SG_PRIMARY_ID "DbPassword=$DB_PASSWORD"
-    # Construire l'ARN du Primary pour le Read Replica cross-region
     - export SOURCE_DB_ARN="arn:aws:rds:${AWS_PRIMARY_REGION}:${AWS_ACCOUNT_ID}:db:wordpress-rds-primary"
-    # Déploiement Read Replica (us-west-2) - réplication asynchrone depuis Primary
     - aws cloudformation deploy --template-file cdk.out/RdsStackSecondary.template.json --stack-name RdsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides DbSubnet1Id=$DB_SUBNET_SECONDARY_1_ID DbSubnet2Id=$DB_SUBNET_SECONDARY_2_ID DbSgId=$DB_SG_SECONDARY_ID SourceDbArn=$SOURCE_DB_ARN
   only:
     changes:
