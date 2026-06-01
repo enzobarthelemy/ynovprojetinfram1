@@ -64,9 +64,9 @@ s3_primary = S3StackPrimary(app, "S3StackPrimary",
 s3_primary.add_dependency(s3_secondary)
 
 # 7. RDS — MySQL Multi-AZ
-rds_primary = RdsStackPrimary(app, "RdsStackPrimary", vpc_stack=vpc_primary, sg_stack=sg_primary, env=env_east, synthesizer=synthesizer_east)
+rds_primary = RdsStackPrimary(app, "RdsStackPrimary", env=env_east, synthesizer=synthesizer_east)
 rds_primary.add_dependency(sg_primary)
-rds_secondary = RdsStackSecondary(app, "RdsStackSecondary", vpc_stack=vpc_secondary, sg_stack=sg_secondary, env=env_west, synthesizer=synthesizer_west)
+rds_secondary = RdsStackSecondary(app, "RdsStackSecondary", env=env_west, synthesizer=synthesizer_west)
 rds_secondary.add_dependency(sg_secondary)
 
 app.synth()
