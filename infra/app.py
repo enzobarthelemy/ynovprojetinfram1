@@ -56,10 +56,12 @@ efs_secondary = EfsStackSecondary(app, "EfsStackSecondary", env=env_west, synthe
 efs_secondary.add_dependency(sg_secondary)
 
 # 6. ASG — Auto Scaling Group avec EFS + Secrets Manager
-asg_primary = AsgStackPrimary(app, "AsgStackPrimary", vpc_stack=vpc_primary, sg_stack=sg_primary, alb_stack=alb_primary, efs_stack=efs_primary, env=env_east, synthesizer=synthesizer_east)
+asg_primary = AsgStackPrimary(app, "AsgStackPrimary", vpc_stack=vpc_primary, sg_stack=sg_primary, alb_stack=alb_primary, env=env_east, synthesizer=synthesizer_east)
 asg_primary.add_dependency(efs_primary)
-asg_secondary = AsgStackSecondary(app, "AsgStackSecondary", vpc_stack=vpc_secondary, sg_stack=sg_secondary, alb_stack=alb_secondary, efs_stack=efs_secondary, env=env_west, synthesizer=synthesizer_west)
+asg_primary.add_dependency(alb_primary)
+asg_secondary = AsgStackSecondary(app, "AsgStackSecondary", vpc_stack=vpc_secondary, sg_stack=sg_secondary, alb_stack=alb_secondary, env=env_west, synthesizer=synthesizer_west)
 asg_secondary.add_dependency(efs_secondary)
+asg_secondary.add_dependency(alb_secondary)
 
 # 7. S3 — Secondary d'abord (Cross-Region Replication)
 s3_secondary = S3StackSecondary(app, "S3StackSecondary", env=env_west, synthesizer=synthesizer_west)

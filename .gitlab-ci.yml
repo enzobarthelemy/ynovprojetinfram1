@@ -1,10 +1,12 @@
 stages:
-  - deploy-network
-  - deploy-security
-  - check-secrets
-  - deploy
-  - deploy-efs
-  - deploy-s3-primary
+  - deploy-network      # VPC
+  - deploy-security     # Security Groups
+  - deploy-database     # RDS Primary + Read Replica
+  - deploy-storage      # EFS + S3 secondary
+  - deploy-secrets      # Secrets Manager (lit endpoint RDS)
+  - deploy-loadbalancer # ALB (avant ASG car ASG importe target_group_arn)
+  - deploy-compute      # EC2 + ASG (dependent de ALB, EFS, secrets)
+  - deploy-s3-primary   # S3 primary (CRR depuis secondary)
 
 variables:
   AWS_DEFAULT_REGION: us-east-1
@@ -46,42 +48,43 @@ deploy-sg:
     changes:
       - infra/stacks/sg_stack.py
 
-check-secrets:
+create-secrets:
   image: nikolaik/python-nodejs:python3.13-nodejs20
-  stage: check-secrets
+  stage: deploy-secrets
   before_script:
     - pip install awscli --quiet
   script:
+    # Récupère l'endpoint RDS Primary (us-east-1)
+    - export RDS_HOST_PRIMARY=$(aws cloudformation describe-stacks --stack-name RdsStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='RdsEndpoint'].OutputValue" --output text)
+    # Récupère l'endpoint du Read Replica (us-west-2)
+    - export RDS_HOST_SECONDARY=$(aws cloudformation describe-stacks --stack-name RdsStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='ReplicaEndpoint'].OutputValue" --output text)
     - |
-      SECRETS=("prod/wordpress/db" "prod/wordpress/app")
-      REGIONS=("$AWS_PRIMARY_REGION" "$AWS_SECONDARY_REGION")
-      MISSING=0
-      for REGION in "${REGIONS[@]}"; do
-        for SECRET in "${SECRETS[@]}"; do
-          aws secretsmanager describe-secret \
-            --secret-id "$SECRET" \
-            --region "$REGION" \
-            --query "Name" \
-            --output text > /dev/null 2>&1 \
-          && echo "OK  [$REGION] $SECRET" \
-          || { echo "MANQUANT  [$REGION] $SECRET"; MISSING=1; }
-        done
-      done
-      if [ $MISSING -eq 1 ]; then
-        echo ""
-        echo "Des secrets sont manquants. Creez-les avec :"
-        echo "  aws secretsmanager create-secret --name prod/wordpress/db --region <REGION> --secret-string '{\"host\":\"...\",\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"...\",\"password\":\"...\"}'"
-        echo "  aws secretsmanager create-secret --name prod/wordpress/app --region <REGION> --secret-string '{\"admin_user\":\"...\",\"admin_password\":\"...\",\"admin_email\":\"...\"}'"
-        exit 1
-      fi
+      WP_ADMIN_PW="${WP_ADMIN_PASSWORD:-$DB_PASSWORD}"
+      WP_ADMIN_MAIL="${WP_ADMIN_EMAIL:-admin@ynov.com}"
+
+      create_or_update() {
+        local NAME="$1"; local STRING="$2"; local REGION="$3"
+        aws secretsmanager create-secret --name "$NAME" --secret-string "$STRING" --region "$REGION" 2>/dev/null \
+          && echo "CREE   [$REGION] $NAME" \
+          || { aws secretsmanager put-secret-value --secret-id "$NAME" --secret-string "$STRING" --region "$REGION" > /dev/null \
+               && echo "MAJ    [$REGION] $NAME"; }
+      }
+
+      # us-east-1 : DB pointe vers le Primary
+      create_or_update "prod/wordpress/db" "{\"host\":\"$RDS_HOST_PRIMARY\",\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"admin\",\"password\":\"$DB_PASSWORD\"}" "$AWS_PRIMARY_REGION"
+      create_or_update "prod/wordpress/app" "{\"admin_user\":\"admin\",\"admin_password\":\"$WP_ADMIN_PW\",\"admin_email\":\"$WP_ADMIN_MAIL\"}" "$AWS_PRIMARY_REGION"
+
+      # us-west-2 : DB pointe vers le Read Replica
+      create_or_update "prod/wordpress/db" "{\"host\":\"$RDS_HOST_SECONDARY\",\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"admin\",\"password\":\"$DB_PASSWORD\"}" "$AWS_SECONDARY_REGION"
+      create_or_update "prod/wordpress/app" "{\"admin_user\":\"admin\",\"admin_password\":\"$WP_ADMIN_PW\",\"admin_email\":\"$WP_ADMIN_MAIL\"}" "$AWS_SECONDARY_REGION"
   only:
     changes:
       - infra/stacks/asg_stack.py
-      - infra/scripts/user_data.sh
+      - infra/script/user_data.sh
 
 deploy-ec2:
   extends: .base
-  stage: deploy
+  stage: deploy-compute
   script:
     - export AMI_ID=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --query "Parameter.Value" --output text)
     - cdk synth Ec2StackPrimary Ec2StackSecondary
@@ -93,7 +96,7 @@ deploy-ec2:
 
 deploy-alb:
   extends: .base
-  stage: deploy
+  stage: deploy-loadbalancer
   script:
     - cdk synth AlbStackPrimary AlbStackSecondary
     - aws cloudformation deploy --template-file cdk.out/AlbStackPrimary.template.json --stack-name AlbStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
@@ -104,21 +107,21 @@ deploy-alb:
 
 deploy-asg:
   extends: .base
-  stage: deploy
-  needs:
-    - check-secrets
+  stage: deploy-compute
   script:
+    - export EFS_ID_PRIMARY=$(aws cloudformation describe-stacks --stack-name EfsStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsId'].OutputValue" --output text)
+    - export EFS_ID_SECONDARY=$(aws cloudformation describe-stacks --stack-name EfsStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsSecondaryId'].OutputValue" --output text)
     - cdk synth AsgStackPrimary AsgStackSecondary
-    - aws cloudformation deploy --template-file cdk.out/AsgStackPrimary.template.json --stack-name AsgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
-    - aws cloudformation deploy --template-file cdk.out/AsgStackSecondary.template.json --stack-name AsgStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/AsgStackPrimary.template.json --stack-name AsgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides EfsId=$EFS_ID_PRIMARY
+    - aws cloudformation deploy --template-file cdk.out/AsgStackSecondary.template.json --stack-name AsgStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides EfsId=$EFS_ID_SECONDARY
   only:
     changes:
       - infra/stacks/asg_stack.py
-      - infra/scripts/user_data.sh
+      - infra/script/user_data.sh
 
 deploy-efs-primary:
   extends: .base
-  stage: deploy-efs
+  stage: deploy-storage
   script:
     - export WEB_SUBNET_PRIMARY_1=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet1Id'].OutputValue" --output text)
     - export WEB_SUBNET_PRIMARY_2=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet2Id'].OutputValue" --output text)
@@ -139,7 +142,7 @@ deploy-efs-primary:
 
 deploy-efs-secondary:
   extends: .base
-  stage: deploy-efs
+  stage: deploy-storage
   needs:
     - job: deploy-efs-primary
       artifacts: true
@@ -156,7 +159,7 @@ deploy-efs-secondary:
 
 deploy-s3-secondary:
   extends: .base
-  stage: deploy
+  stage: deploy-storage
   script:
     - cdk synth S3StackSecondary
     - aws cloudformation deploy --template-file cdk.out/S3StackSecondary.template.json --stack-name S3StackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
@@ -176,7 +179,7 @@ deploy-s3-primary:
 
 deploy-rds:
   extends: .base
-  stage: deploy
+  stage: deploy-database
   script:
     - export DB_SUBNET_PRIMARY_1_ID=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSubnet1Id'].OutputValue" --output text)
     - export DB_SUBNET_PRIMARY_2_ID=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSubnet2Id'].OutputValue" --output text)

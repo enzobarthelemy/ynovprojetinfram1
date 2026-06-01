@@ -1,52 +1,52 @@
-import base64
 import os
 from aws_cdk import (
     Stack,
+    CfnParameter,
+    Fn,
     aws_autoscaling as autoscaling,
     aws_ec2 as ec2,
-    aws_iam as iam,
     aws_cloudwatch as cloudwatch,
-    Duration,
-    Fn,
 )
 from constructs import Construct
 
 
-def _build_user_data(efs_id: str, secret_db_name: str, secret_wp_name: str) -> str:
+def _build_user_data(efs_id_value, secret_db_name: str, secret_wp_name: str):
     """
-    Lit user_data.sh, remplace les placeholders et retourne le script en base64.
-    Pas d'upload S3 → compatible BootstraplessSynthesizer.
+    Lit user_data.sh, remplace les noms de secrets (statiques) en Python,
+    puis injecte l'EFS_ID via Fn.join (résolu au deploy, pas figé au synth).
+    Fn.join évite les problèmes d'échappement des variables bash ${...} de Fn.sub.
+    Retourne un token Fn.base64 — compatible BootstraplessSynthesizer (pas d'asset).
     """
     script_path = os.path.join(os.path.dirname(__file__), "..", "script", "user_data.sh")
     with open(script_path, "r") as f:
         raw = f.read()
-    raw = raw.replace("${EFS_ID}", efs_id)
+
+    # Remplacements statiques (chaînes littérales, pas de token)
     raw = raw.replace("prod/wordpress/db", secret_db_name)
     raw = raw.replace("prod/wordpress/app", secret_wp_name)
-    return base64.b64encode(raw.encode("utf-8")).decode("utf-8")
 
-
-def _get_lab_role_arn(stack: Stack) -> str:
-    return f"arn:aws:iam::{stack.account}:role/LabRole"
+    # Découpe sur le placeholder ${EFS_ID} puis rejoint avec la vraie valeur
+    parts = raw.split("${EFS_ID}")
+    joined = Fn.join(efs_id_value, parts)
+    return Fn.base64(joined)
 
 
 class AsgStackPrimary(Stack):
-    def __init__(self, scope, construct_id: str, vpc_stack, sg_stack, alb_stack, efs_stack,
+    def __init__(self, scope, construct_id: str, vpc_stack, sg_stack, alb_stack,
                  secret_db_name: str = "prod/wordpress/db",
                  secret_wp_name: str = "prod/wordpress/app", **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        user_data_b64 = _build_user_data(
-            efs_stack.file_system_id, secret_db_name, secret_wp_name
-        )
+        # EFS ID passé au deploy via parameter-overrides (récupéré depuis EfsStackPrimary)
+        efs_id = CfnParameter(self, "EfsId", type="String").value_as_string
 
-        # L1 LaunchTemplate — pas d'assets, compatible BootstraplessSynthesizer
+        user_data_b64 = _build_user_data(efs_id, secret_db_name, secret_wp_name)
+
         lt = ec2.CfnLaunchTemplate(
             self, "PrimaryLaunchTemplate",
             launch_template_data=ec2.CfnLaunchTemplate.LaunchTemplateDataProperty(
                 instance_type="t3.small",
-                image_id=ec2.MachineImage.latest_amazon_linux2()
-                    .get_image(self).image_id,
+                image_id=ec2.MachineImage.latest_amazon_linux2().get_image(self).image_id,
                 security_group_ids=[sg_stack.asg_sg.ref],
                 iam_instance_profile=ec2.CfnLaunchTemplate.IamInstanceProfileProperty(
                     arn=f"arn:aws:iam::{self.account}:instance-profile/LabInstanceProfile"
@@ -67,7 +67,6 @@ class AsgStackPrimary(Stack):
             ),
         )
 
-        # Subnets web privés exposés directement depuis vpc_stack (L2 PrivateSubnet)
         subnet_ids = [
             vpc_stack.web_subnet_1.subnet_id,
             vpc_stack.web_subnet_2.subnet_id,
@@ -93,7 +92,6 @@ class AsgStackPrimary(Stack):
             ],
         )
 
-        # Target Tracking CPU 70 %
         autoscaling.CfnScalingPolicy(
             self, "TargetTrackingCPU",
             auto_scaling_group_name=self.asg.ref,
@@ -107,7 +105,6 @@ class AsgStackPrimary(Stack):
             ),
         )
 
-        # Step Scaling pour stress-test
         cpu_alarm_high = cloudwatch.CfnAlarm(
             self, "CpuAlarmHigh",
             alarm_description="CPU > 70% — scale out",
@@ -142,21 +139,20 @@ class AsgStackPrimary(Stack):
 
 
 class AsgStackSecondary(Stack):
-    def __init__(self, scope, construct_id: str, vpc_stack, sg_stack, alb_stack, efs_stack,
+    def __init__(self, scope, construct_id: str, vpc_stack, sg_stack, alb_stack,
                  secret_db_name: str = "prod/wordpress/db",
                  secret_wp_name: str = "prod/wordpress/app", **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        user_data_b64 = _build_user_data(
-            efs_stack.file_system_id, secret_db_name, secret_wp_name
-        )
+        efs_id = CfnParameter(self, "EfsId", type="String").value_as_string
+
+        user_data_b64 = _build_user_data(efs_id, secret_db_name, secret_wp_name)
 
         lt = ec2.CfnLaunchTemplate(
             self, "SecondaryLaunchTemplate",
             launch_template_data=ec2.CfnLaunchTemplate.LaunchTemplateDataProperty(
                 instance_type="t3.small",
-                image_id=ec2.MachineImage.latest_amazon_linux2()
-                    .get_image(self).image_id,
+                image_id=ec2.MachineImage.latest_amazon_linux2().get_image(self).image_id,
                 security_group_ids=[sg_stack.asg_sg.ref],
                 iam_instance_profile=ec2.CfnLaunchTemplate.IamInstanceProfileProperty(
                     arn=f"arn:aws:iam::{self.account}:instance-profile/LabInstanceProfile"
