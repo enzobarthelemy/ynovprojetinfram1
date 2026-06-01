@@ -40,7 +40,9 @@ deploy-vpc:
   stage: deploy-network
   script:
     - cdk synth VpcStackPrimary VpcStackSecondary
+    - clean_rollback VpcStackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/VpcStackPrimary.template.json --stack-name VpcStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - clean_rollback VpcStackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation deploy --template-file cdk.out/VpcStackSecondary.template.json --stack-name VpcStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
@@ -53,8 +55,10 @@ deploy-sg:
     - export VPC_PRIMARY_ID=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
     - export VPC_SECONDARY_ID=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
     - cdk synth SgStackPrimary SgStackSecondary
+    - clean_rollback SgStackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation wait stack-update-complete --stack-name SgStackPrimary --region $AWS_PRIMARY_REGION 2>/dev/null || true
     - aws cloudformation deploy --template-file cdk.out/SgStackPrimary.template.json --stack-name SgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - clean_rollback SgStackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation wait stack-update-complete --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION 2>/dev/null || true
     - aws cloudformation deploy --template-file cdk.out/SgStackSecondary.template.json --stack-name SgStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
@@ -101,7 +105,9 @@ deploy-ec2:
   script:
     - export AMI_ID=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --query "Parameter.Value" --output text)
     - cdk synth Ec2StackPrimary Ec2StackSecondary
+    - clean_rollback Ec2StackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/Ec2StackPrimary.template.json --stack-name Ec2StackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - clean_rollback Ec2StackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation deploy --template-file cdk.out/Ec2StackSecondary.template.json --stack-name Ec2StackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
@@ -112,7 +118,9 @@ deploy-alb:
   stage: deploy-loadbalancer
   script:
     - cdk synth AlbStackPrimary AlbStackSecondary
+    - clean_rollback AlbStackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/AlbStackPrimary.template.json --stack-name AlbStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - clean_rollback AlbStackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation deploy --template-file cdk.out/AlbStackSecondary.template.json --stack-name AlbStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
@@ -125,7 +133,9 @@ deploy-asg:
     - export EFS_ID_PRIMARY=$(aws cloudformation describe-stacks --stack-name EfsStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsId'].OutputValue" --output text)
     - export EFS_ID_SECONDARY=$(aws cloudformation describe-stacks --stack-name EfsStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsSecondaryId'].OutputValue" --output text)
     - cdk synth AsgStackPrimary AsgStackSecondary
+    - clean_rollback AsgStackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/AsgStackPrimary.template.json --stack-name AsgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides EfsId=$EFS_ID_PRIMARY
+    - clean_rollback AsgStackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation deploy --template-file cdk.out/AsgStackSecondary.template.json --stack-name AsgStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides EfsId=$EFS_ID_SECONDARY
   only:
     changes:
