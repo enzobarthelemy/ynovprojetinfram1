@@ -13,7 +13,7 @@ class AlbStackPrimary(Stack):
         # 1. Création de l'ALB public en ciblant les variables des autres stacks
         self.load_balancer = elbv2.ApplicationLoadBalancer(
             self, "AlbPrimary",
-            vpc=vpc_stack.vpc_prod,
+            vpc=vpc_stack.ec2.Vpc,
             internet_facing=True,
             security_group=sg_stack.sg_alb,
             # On place l'ALB spécifiquement dans les subnets publics nommés
@@ -26,7 +26,7 @@ class AlbStackPrimary(Stack):
         # 2. Création du Target Group (Cible) pour l'Auto Scaling Group
         self.target_group = elbv2.ApplicationTargetGroup(
             self, "TargetGroupPrimary",
-            vpc=vpc_stack.vpc_prod,
+            vpc=vpc_stack.ec2.Vpc,
             port=80,
             protocol=elbv2.ApplicationProtocol.HTTP,
             target_type=elbv2.TargetType.INSTANCE,
