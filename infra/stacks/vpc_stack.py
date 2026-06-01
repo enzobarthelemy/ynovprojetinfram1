@@ -12,7 +12,7 @@ class VpcStackPrimary(Stack):
         # ------------------------------------------------------------------
         # VPC 1 : PRODUCTION (10.0.0.0/16)         
         # ------------------------------------------------------------------
-        vpc_prod = ec2.Vpc(
+        self.vpc_prod = ec2.Vpc(
             self, "VpcProduction",
             vpc_name="VpcProduction",
             ip_addresses=ec2.IpAddresses.cidr("10.0.0.0/16"),
@@ -23,59 +23,66 @@ class VpcStackPrimary(Stack):
         igw_prod = ec2.CfnInternetGateway(self, "ProdIGW")
         ec2.CfnVPCGatewayAttachment(
             self, "ProdIGWAttachment",
-            vpc_id=vpc_prod.vpc_id,
+            vpc_id=self.vpc_prod.vpc_id, 
             internet_gateway_id=igw_prod.attr_internet_gateway_id
         )
 
-        sub_public_1_prod = ec2.PublicSubnet(
+        self.sub_public_1_prod = ec2.PublicSubnet(
             self, "ProdPublicSubnetAZ1",
-            vpc_id=vpc_prod.vpc_id,
+            vpc_id=self.vpc_prod.vpc_id, 
             availability_zone="us-east-1a",
             cidr_block="10.0.1.0/24",
             map_public_ip_on_launch=True
         )
-        sub_public_2_prod = ec2.PublicSubnet(
+        self.sub_public_2_prod = ec2.PublicSubnet(
             self, "ProdPublicSubnetAZ2",
-            vpc_id=vpc_prod.vpc_id,
+            vpc_id=self.vpc_prod.vpc_id, 
             availability_zone="us-east-1b",
             cidr_block="10.0.2.0/24",
             map_public_ip_on_launch=True
         )
         
-        sub_public_1_prod.add_route(
+        self.sub_public_1_prod.add_route(
             "ProdPublicRoute1",
             router_id=igw_prod.attr_internet_gateway_id,
             router_type=ec2.RouterType.GATEWAY
         )
-        sub_public_2_prod.add_route(
+        self.sub_public_2_prod.add_route(
             "ProdPublicRoute2",
             router_id=igw_prod.attr_internet_gateway_id,
             router_type=ec2.RouterType.GATEWAY
         )
         
-        sub_private_1_prod = ec2.PrivateSubnet(
+        self.sub_private_1_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetWebAZ1",
-            vpc_id=vpc_prod.vpc_id,
+            vpc_id=self.vpc_prod.vpc_id, 
             availability_zone="us-east-1a",
             cidr_block="10.0.11.0/24"
         )
-        sub_private_2_prod = ec2.PrivateSubnet(
+        self.sub_private_2_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetWebAZ2",
-            vpc_id=vpc_prod.vpc_id,
+            vpc_id=self.vpc_prod.vpc_id, 
             availability_zone="us-east-1b",
             cidr_block="10.0.12.0/24"
         )
-        sub_private_3_prod = ec2.PrivateSubnet(
+        self.sub_private_3_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetDBAZ1",
-            vpc_id=vpc_prod.vpc_id,
+            vpc_id=self.vpc_prod.vpc_id, 
             availability_zone="us-east-1a",
             cidr_block="10.0.21.0/24"
         )
-        sub_private_4_prod = ec2.PrivateSubnet(
+        self.sub_private_4_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetDBAZ2",
-            vpc_id=vpc_prod.vpc_id,
+            vpc_id=self.vpc_prod.vpc_id, 
             availability_zone="us-east-1b",
             cidr_block="10.0.22.0/24"
+        )
+
+        # AJOUT CRITIQUE : Endpoint S3 pour les sous-réseaux privés
+        self.vpc_prod.add_gateway_endpoint(
+            "S3EndpointPrimary",
+            service=ec2.GatewayVpcEndpointAwsService.S3,
+            subnets=[ec2.SubnetSelection(subnets=[self.sub_private_1_prod, self.sub_private_2_prod])]
         )
         
 
@@ -87,7 +94,7 @@ class VpcStackSecondary(Stack):
         # ------------------------------------------------------------------
         # VPC 2 : BACKUP (10.1.0.0/16)   
         # ------------------------------------------------------------------
-        vpc_backup = ec2.Vpc(
+        self.vpc_backup = ec2.Vpc(
             self, "VpcBackup",
             vpc_name="VpcBackup",
             ip_addresses=ec2.IpAddresses.cidr("10.1.0.0/16"),
@@ -98,57 +105,64 @@ class VpcStackSecondary(Stack):
         igw_backup = ec2.CfnInternetGateway(self, "BackupIGW")
         ec2.CfnVPCGatewayAttachment(
             self, "BackupIGWAttachment",
-            vpc_id=vpc_backup.vpc_id,
+            vpc_id=self.vpc_backup.vpc_id,
             internet_gateway_id=igw_backup.attr_internet_gateway_id
         )
 
-        sub_public_1_backup = ec2.PublicSubnet(
+        self.sub_public_1_backup = ec2.PublicSubnet(
             self, "BackupPublicSubnetAZ1",
-            vpc_id=vpc_backup.vpc_id, # Corrigé
+            vpc_id=self.vpc_backup.vpc_id,
             availability_zone="us-west-2a",
             cidr_block="10.1.1.0/24",
             map_public_ip_on_launch=True
         )
-        sub_public_2_backup = ec2.PublicSubnet(
+        self.sub_public_2_backup = ec2.PublicSubnet(
             self, "BackupPublicSubnetAZ2",
-            vpc_id=vpc_backup.vpc_id, # Corrigé
+            vpc_id=self.vpc_backup.vpc_id, 
             availability_zone="us-west-2b",
             cidr_block="10.1.2.0/24",
             map_public_ip_on_launch=True
         )
             
-        sub_public_1_backup.add_route(
+        self.sub_public_1_backup.add_route(
             "BackupPublicRoute1",
             router_id=igw_backup.attr_internet_gateway_id,
             router_type=ec2.RouterType.GATEWAY
         )
-        sub_public_2_backup.add_route(
+        self.sub_public_2_backup.add_route(
             "BackupPublicRoute2",
             router_id=igw_backup.attr_internet_gateway_id,
             router_type=ec2.RouterType.GATEWAY
         )
         
-        sub_private_1_backup = ec2.PrivateSubnet(
+        self.sub_private_1_backup = ec2.PrivateSubnet(
             self, "BackupPrivateSubnetWebAZ1",
-            vpc_id=vpc_backup.vpc_id, # Corrigé
+            vpc_id=self.vpc_backup.vpc_id, 
             availability_zone="us-west-2a",
             cidr_block="10.1.11.0/24"
         )
-        sub_private_2_backup = ec2.PrivateSubnet(
+        self.sub_private_2_backup = ec2.PrivateSubnet(
             self, "BackupPrivateSubnetWebAZ2",
-            vpc_id=vpc_backup.vpc_id, # Corrigé
+            vpc_id=self.vpc_backup.vpc_id, 
             availability_zone="us-west-2b",
             cidr_block="10.1.12.0/24"
         )
-        sub_private_3_backup = ec2.PrivateSubnet(
+        self.sub_private_3_backup = ec2.PrivateSubnet(
             self, "BackupPrivateSubnetDBAZ1",
-            vpc_id=vpc_backup.vpc_id, # Corrigé
+            vpc_id=self.vpc_backup.vpc_id, 
             availability_zone="us-west-2a",
             cidr_block="10.1.21.0/24"
         )
-        sub_private_4_backup = ec2.PrivateSubnet(
+        self.sub_private_4_backup = ec2.PrivateSubnet(
             self, "BackupPrivateSubnetDBAZ2",
-            vpc_id=vpc_backup.vpc_id, # Corrigé
+            vpc_id=self.vpc_backup.vpc_id, 
             availability_zone="us-west-2b",
             cidr_block="10.1.22.0/24"
+        )
+
+        # AJOUT CRITIQUE : Endpoint S3 pour les sous-réseaux privés
+        self.vpc_backup.add_gateway_endpoint(
+            "S3EndpointSecondary",
+            service=ec2.GatewayVpcEndpointAwsService.S3,
+            subnets=[ec2.SubnetSelection(subnets=[self.sub_private_1_backup, self.sub_private_2_backup])]
         )
