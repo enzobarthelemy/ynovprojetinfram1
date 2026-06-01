@@ -149,7 +149,7 @@ deploy-efs-secondary:
     - export WEB_SUBNET_SECONDARY_2=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet2Id'].OutputValue" --output text)
     - export EFS_SG_SECONDARY=$(aws cloudformation describe-stacks --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsSgId'].OutputValue" --output text)
     - cdk synth EfsStackSecondary
-    - aws cloudformation deploy --template-file cdk.out/EfsStackSecondary.template.json --stack-name EfsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides WebSubnet1Id=$WEB_SUBNET_SECONDARY_1 WebSubnet2Id=$WEB_SUBNET_SECONDARY_2 EfsSgId=$EFS_SG_SECONDARY EfsSecondaryId=$EFS_SECONDARY_ID
+    - aws cloudformation deploy --template-file cdk.out/EfsStackSecondary.template.json --stack-name EfsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides WebSubnet1Id=$WEB_SUBNET_SECONDARY_1 WebSubnet2Id=$WEB_SUBNET_SECONDARY_2 EfsSgId=$EFS_SG_SECONDARY EfsSecondaryFsId=$EFS_SECONDARY_ID
   only:
     changes:
       - infra/stacks/efs_stack.py

@@ -81,7 +81,7 @@ class EfsStackSecondary(Stack):
         web_subnet_1      = CfnParameter(self, "WebSubnet1Id", type="String").value_as_string
         web_subnet_2      = CfnParameter(self, "WebSubnet2Id", type="String").value_as_string
         efs_sg_id         = CfnParameter(self, "EfsSgId", type="String").value_as_string
-        secondary_fs_id   = CfnParameter(self, "EfsSecondaryId", type="String").value_as_string
+        secondary_fs_id   = CfnParameter(self, "EfsSecondaryFsId", type="String").value_as_string
 
         efs.CfnMountTarget(self, "MountTarget1",
             file_system_id=secondary_fs_id,
