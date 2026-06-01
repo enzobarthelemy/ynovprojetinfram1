@@ -11,6 +11,7 @@ variables:
 
 .base:
   image: nikolaik/python-nodejs:python3.13-nodejs20
+  resource_group: aws-deploy
   before_script:
     - pip install awscli aws-cdk-lib constructs
     - npm install -g aws-cdk
@@ -101,6 +102,12 @@ deploy-rds:
   extends: .base
   stage: deploy
   script:
+    - export DB_SUBNET_PRIMARY_1_ID=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSubnet1Id'].OutputValue" --output text)
+    - export DB_SUBNET_PRIMARY_2_ID=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSubnet2Id'].OutputValue" --output text)
+    - export DB_SUBNET_SECONDARY_1_ID=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSubnet1Id'].OutputValue" --output text)
+    - export DB_SUBNET_SECONDARY_2_ID=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSubnet2Id'].OutputValue" --output text)
+    - export DB_SG_PRIMARY_ID=$(aws cloudformation describe-stacks --stack-name SgStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSgId'].OutputValue" --output text)
+    - export DB_SG_SECONDARY_ID=$(aws cloudformation describe-stacks --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSgId'].OutputValue" --output text)
     - cdk synth RdsStackPrimary RdsStackSecondary
     - aws cloudformation deploy --template-file cdk.out/RdsStackPrimary.template.json --stack-name RdsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/RdsStackSecondary.template.json --stack-name RdsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION

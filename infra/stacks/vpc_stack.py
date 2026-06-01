@@ -80,6 +80,12 @@ class VpcStackPrimary(Stack):
         )
 
         CfnOutput(self, "VpcId", value=self.vpc_prod.vpc_id)
+        CfnOutput(self, "DbSubnet1Id", value=sub_private_3_prod.subnet_id)
+        CfnOutput(self, "DbSubnet2Id", value=sub_private_4_prod.subnet_id)
+        CfnOutput(self, "WebSubnet1Id", value=sub_private_1_prod.subnet_id)
+        CfnOutput(self, "WebSubnet2Id", value=sub_private_2_prod.subnet_id)
+        CfnOutput(self, "PublicSubnet1Id", value=sub_public_1_prod.subnet_id)
+        CfnOutput(self, "PublicSubnet2Id", value=sub_public_2_prod.subnet_id)
 
 
 class VpcStackSecondary(Stack):
@@ -157,3 +163,9 @@ class VpcStackSecondary(Stack):
         )
 
         CfnOutput(self, "VpcId", value=self.vpc_backup.vpc_id)
+        CfnOutput(self, "DbSubnet1Id", value=sub_private_3_backup.subnet_id)
+        CfnOutput(self, "DbSubnet2Id", value=sub_private_4_backup.subnet_id)
+        CfnOutput(self, "WebSubnet1Id", value=sub_private_1_backup.subnet_id)
+        CfnOutput(self, "WebSubnet2Id", value=sub_private_2_backup.subnet_id)
+        CfnOutput(self, "PublicSubnet1Id", value=sub_public_1_backup.subnet_id)
+        CfnOutput(self, "PublicSubnet2Id", value=sub_public_2_backup.subnet_id)
