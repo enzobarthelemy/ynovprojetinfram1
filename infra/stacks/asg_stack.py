@@ -11,7 +11,7 @@ import os
 
 
 def _load_user_data(efs_id: str, secret_db_name: str, secret_wp_name: str) -> ec2.UserData:
-    script_path = os.path.join(os.path.dirname(__file__), "..", "scripts", "user_data.sh")
+    script_path = os.path.join(os.path.dirname(__file__), "..", "script", "user_data.sh")
     with open(script_path, "r") as f:
         raw = f.read()
     raw = raw.replace('${EFS_ID}', efs_id)
