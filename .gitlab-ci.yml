@@ -1,6 +1,11 @@
 stages:
-  - deploy
-  - deploy-s3-primary
+  - deploy-network      # VPC + S3 secondary (independants)
+  - deploy-security     # Security Groups + S3 primary (CRR)
+  - deploy-database     # RDS Primary + Secondary
+  - deploy-storage      # EFS
+  - deploy-secrets      # Secrets Manager (lit endpoint RDS)
+  - deploy-loadbalancer # ALB (avant ASG car ASG importe target_group_arn)
+  - deploy-compute      # EC2 + ASG (dependent de ALB, EFS, secrets)
 
 variables:
   AWS_DEFAULT_REGION: us-east-1
@@ -9,18 +14,35 @@ variables:
 
 .base:
   image: nikolaik/python-nodejs:python3.13-nodejs20
+  resource_group: aws-deploy
   before_script:
     - pip install awscli aws-cdk-lib constructs
     - npm install -g aws-cdk
     - cd infra
     - pip install -r requirements.txt
+    # Fonction : supprime un stack bloqué en ROLLBACK_COMPLETE (échec CREATE initial)
+    # car CloudFormation refuse de le mettre à jour dans cet état
+    - |
+      clean_rollback() {
+        local NAME="$1"; local REGION="$2"
+        local STATUS
+        STATUS=$(aws cloudformation describe-stacks --stack-name "$NAME" --region "$REGION" --query "Stacks[0].StackStatus" --output text 2>/dev/null || echo "NONE")
+        # Etats non-recuperables : CloudFormation refuse l'update, il faut supprimer d'abord
+        if [ "$STATUS" = "ROLLBACK_COMPLETE" ] || [ "$STATUS" = "REVIEW_IN_PROGRESS" ]; then
+          echo "Stack $NAME en $STATUS -> suppression avant redeploiement"
+          aws cloudformation delete-stack --stack-name "$NAME" --region "$REGION"
+          aws cloudformation wait stack-delete-complete --stack-name "$NAME" --region "$REGION"
+        fi
+      }
 
 deploy-vpc:
   extends: .base
-  stage: deploy
+  stage: deploy-network
   script:
     - cdk synth VpcStackPrimary VpcStackSecondary
+    - clean_rollback VpcStackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/VpcStackPrimary.template.json --stack-name VpcStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - clean_rollback VpcStackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation deploy --template-file cdk.out/VpcStackSecondary.template.json --stack-name VpcStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
@@ -28,22 +50,64 @@ deploy-vpc:
 
 deploy-sg:
   extends: .base
-  stage: deploy
+  stage: deploy-security
   script:
+    - export VPC_PRIMARY_ID=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
+    - export VPC_SECONDARY_ID=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='VpcId'].OutputValue" --output text)
     - cdk synth SgStackPrimary SgStackSecondary
+    - clean_rollback SgStackPrimary $AWS_PRIMARY_REGION
+    - aws cloudformation wait stack-update-complete --stack-name SgStackPrimary --region $AWS_PRIMARY_REGION 2>/dev/null || true
     - aws cloudformation deploy --template-file cdk.out/SgStackPrimary.template.json --stack-name SgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - clean_rollback SgStackSecondary $AWS_SECONDARY_REGION
+    - aws cloudformation wait stack-update-complete --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION 2>/dev/null || true
     - aws cloudformation deploy --template-file cdk.out/SgStackSecondary.template.json --stack-name SgStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
       - infra/stacks/sg_stack.py
 
+create-secrets:
+  image: nikolaik/python-nodejs:python3.13-nodejs20
+  stage: deploy-secrets
+  before_script:
+    - pip install awscli --quiet
+  script:
+    # Récupère l'endpoint RDS Primary (us-east-1)
+    - export RDS_HOST_PRIMARY=$(aws cloudformation describe-stacks --stack-name RdsStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='RdsEndpoint'].OutputValue" --output text)
+    # Récupère l'endpoint du Read Replica (us-west-2)
+    - export RDS_HOST_SECONDARY=$(aws cloudformation describe-stacks --stack-name RdsStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='ReplicaEndpoint'].OutputValue" --output text)
+    - |
+      WP_ADMIN_PW="${WP_ADMIN_PASSWORD:-$DB_PASSWORD}"
+      WP_ADMIN_MAIL="${WP_ADMIN_EMAIL:-admin@ynov.com}"
+
+      create_or_update() {
+        local NAME="$1"; local STRING="$2"; local REGION="$3"
+        aws secretsmanager create-secret --name "$NAME" --secret-string "$STRING" --region "$REGION" 2>/dev/null \
+          && echo "CREE   [$REGION] $NAME" \
+          || { aws secretsmanager put-secret-value --secret-id "$NAME" --secret-string "$STRING" --region "$REGION" > /dev/null \
+               && echo "MAJ    [$REGION] $NAME"; }
+      }
+
+      # us-east-1 : DB pointe vers le Primary
+      create_or_update "prod/wordpress/db" "{\"host\":\"$RDS_HOST_PRIMARY\",\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"admin\",\"password\":\"$DB_PASSWORD\"}" "$AWS_PRIMARY_REGION"
+      create_or_update "prod/wordpress/app" "{\"admin_user\":\"admin\",\"admin_password\":\"$WP_ADMIN_PW\",\"admin_email\":\"$WP_ADMIN_MAIL\"}" "$AWS_PRIMARY_REGION"
+
+      # us-west-2 : DB pointe vers le Read Replica
+      create_or_update "prod/wordpress/db" "{\"host\":\"$RDS_HOST_SECONDARY\",\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"admin\",\"password\":\"$DB_PASSWORD\"}" "$AWS_SECONDARY_REGION"
+      create_or_update "prod/wordpress/app" "{\"admin_user\":\"admin\",\"admin_password\":\"$WP_ADMIN_PW\",\"admin_email\":\"$WP_ADMIN_MAIL\"}" "$AWS_SECONDARY_REGION"
+  only:
+    changes:
+      - infra/stacks/asg_stack.py
+      - infra/script/user_data.sh
+
 deploy-ec2:
   extends: .base
-  stage: deploy
+  stage: deploy-compute
   script:
     - export AMI_ID=$(aws ssm get-parameter --name /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2 --query "Parameter.Value" --output text)
     - cdk synth Ec2StackPrimary Ec2StackSecondary
+    - clean_rollback Ec2StackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/Ec2StackPrimary.template.json --stack-name Ec2StackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - clean_rollback Ec2StackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation deploy --template-file cdk.out/Ec2StackSecondary.template.json --stack-name Ec2StackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
@@ -51,10 +115,12 @@ deploy-ec2:
 
 deploy-alb:
   extends: .base
-  stage: deploy
+  stage: deploy-loadbalancer
   script:
     - cdk synth AlbStackPrimary AlbStackSecondary
+    - clean_rollback AlbStackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/AlbStackPrimary.template.json --stack-name AlbStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
+    - clean_rollback AlbStackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation deploy --template-file cdk.out/AlbStackSecondary.template.json --stack-name AlbStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
@@ -62,32 +128,116 @@ deploy-alb:
 
 deploy-asg:
   extends: .base
-  stage: deploy
+  stage: deploy-compute
   script:
+    - export EFS_ID_PRIMARY=$(aws cloudformation describe-stacks --stack-name EfsStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsId'].OutputValue" --output text)
+    - export EFS_ID_SECONDARY=$(aws cloudformation describe-stacks --stack-name EfsStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsSecondaryId'].OutputValue" --output text)
     - cdk synth AsgStackPrimary AsgStackSecondary
-    - aws cloudformation deploy --template-file cdk.out/AsgStackPrimary.template.json --stack-name AsgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
-    - aws cloudformation deploy --template-file cdk.out/AsgStackSecondary.template.json --stack-name AsgStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
+    - clean_rollback AsgStackPrimary $AWS_PRIMARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/AsgStackPrimary.template.json --stack-name AsgStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides EfsId=$EFS_ID_PRIMARY
+    - clean_rollback AsgStackSecondary $AWS_SECONDARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/AsgStackSecondary.template.json --stack-name AsgStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides EfsId=$EFS_ID_SECONDARY
   only:
     changes:
       - infra/stacks/asg_stack.py
+      - infra/script/user_data.sh
 
-# S3 Secondary en us-west-2 d'abord (requis pour la Cross-Region Replication)
+deploy-efs-primary:
+  extends: .base
+  stage: deploy-storage
+  script:
+    - export WEB_SUBNET_PRIMARY_1=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet1Id'].OutputValue" --output text)
+    - export WEB_SUBNET_PRIMARY_2=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet2Id'].OutputValue" --output text)
+    - export EFS_SG_PRIMARY=$(aws cloudformation describe-stacks --stack-name SgStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsSgId'].OutputValue" --output text)
+    - cdk synth EfsStackPrimary
+    - clean_rollback EfsStackPrimary $AWS_PRIMARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/EfsStackPrimary.template.json --stack-name EfsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides WebSubnet1Id=$WEB_SUBNET_PRIMARY_1 WebSubnet2Id=$WEB_SUBNET_PRIMARY_2 EfsSgId=$EFS_SG_PRIMARY
+    # Poll jusqu'à ce que le FS répliqué en us-west-2 soit provisionné (ID disponible)
+    - |
+      echo "Attente provisioning du FS replique en $AWS_SECONDARY_REGION..."
+      rm -f efs_secondary_id.txt
+      for i in $(seq 1 30); do
+        DEST_ID=$(aws efs describe-replication-configurations --region $AWS_PRIMARY_REGION --query "Replications[0].Destinations[0].FileSystemId" --output text 2>/dev/null || echo "")
+        if [ -n "$DEST_ID" ] && [ "$DEST_ID" != "None" ]; then
+          echo "FS replique : $DEST_ID"
+          echo "$DEST_ID" > efs_secondary_id.txt
+          break
+        fi
+        echo "  pas encore pret (tentative $i/30), attente 20s..."
+        sleep 20
+      done
+      if [ ! -s efs_secondary_id.txt ]; then
+        echo "ERREUR: FS replique non disponible apres 10 min"
+        exit 1
+      fi
+  artifacts:
+    paths:
+      - efs_secondary_id.txt
+    expire_in: 1 hour
+  only:
+    changes:
+      - infra/stacks/efs_stack.py
+
+deploy-efs-secondary:
+  extends: .base
+  stage: deploy-storage
+  needs:
+    - job: deploy-efs-primary
+      artifacts: true
+  script:
+    # Récupère l'ID du FS répliqué directement depuis la config de réplication (auto-suffisant)
+    - |
+      echo "Recuperation de l'ID du FS replique..."
+      EFS_SECONDARY_ID=""
+      for i in $(seq 1 30); do
+        EFS_SECONDARY_ID=$(aws efs describe-replication-configurations --region $AWS_PRIMARY_REGION --query "Replications[0].Destinations[0].FileSystemId" --output text 2>/dev/null || echo "")
+        if [ -n "$EFS_SECONDARY_ID" ] && [ "$EFS_SECONDARY_ID" != "None" ]; then
+          break
+        fi
+        echo "  ID pas encore disponible (tentative $i/30), attente 20s..."
+        sleep 20
+      done
+      if [ -z "$EFS_SECONDARY_ID" ] || [ "$EFS_SECONDARY_ID" = "None" ]; then
+        echo "ERREUR: ID du FS replique introuvable"
+        exit 1
+      fi
+      export EFS_SECONDARY_ID
+      echo "EFS Secondary ID = $EFS_SECONDARY_ID"
+    # Attendre que le FS répliqué soit 'available' dans us-west-2 avant les mount targets
+    - |
+      for i in $(seq 1 30); do
+        STATE=$(aws efs describe-file-systems --file-system-id "$EFS_SECONDARY_ID" --region $AWS_SECONDARY_REGION --query "FileSystems[0].LifeCycleState" --output text 2>/dev/null || echo "")
+        echo "  etat FS: $STATE (tentative $i/30)"
+        [ "$STATE" = "available" ] && break
+        sleep 20
+      done
+    - export WEB_SUBNET_SECONDARY_1=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet1Id'].OutputValue" --output text)
+    - export WEB_SUBNET_SECONDARY_2=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='WebSubnet2Id'].OutputValue" --output text)
+    - export EFS_SG_SECONDARY=$(aws cloudformation describe-stacks --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='EfsSgId'].OutputValue" --output text)
+    - cdk synth EfsStackSecondary
+    - clean_rollback EfsStackSecondary $AWS_SECONDARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/EfsStackSecondary.template.json --stack-name EfsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides WebSubnet1Id=$WEB_SUBNET_SECONDARY_1 WebSubnet2Id=$WEB_SUBNET_SECONDARY_2 EfsSgId=$EFS_SG_SECONDARY EfsSecondaryFsId=$EFS_SECONDARY_ID
+  only:
+    changes:
+      - infra/stacks/efs_stack.py
+
 deploy-s3-secondary:
   extends: .base
-  stage: deploy
+  stage: deploy-network
   script:
     - cdk synth S3StackSecondary
+    - clean_rollback S3StackSecondary $AWS_SECONDARY_REGION
     - aws cloudformation deploy --template-file cdk.out/S3StackSecondary.template.json --stack-name S3StackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
   only:
     changes:
       - infra/stacks/s3_stack.py
 
-# S3 Primary en us-east-1 après le secondary (Cross-Region Replication)
 deploy-s3-primary:
   extends: .base
-  stage: deploy-s3-primary
+  stage: deploy-security
   script:
     - cdk synth S3StackPrimary
+    - clean_rollback S3StackPrimary $AWS_PRIMARY_REGION
     - aws cloudformation deploy --template-file cdk.out/S3StackPrimary.template.json --stack-name S3StackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
   only:
     changes:
@@ -95,11 +245,59 @@ deploy-s3-primary:
 
 deploy-rds:
   extends: .base
-  stage: deploy
+  stage: deploy-database
   script:
+    - export DB_SUBNET_PRIMARY_1_ID=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSubnet1Id'].OutputValue" --output text)
+    - export DB_SUBNET_PRIMARY_2_ID=$(aws cloudformation describe-stacks --stack-name VpcStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSubnet2Id'].OutputValue" --output text)
+    - export DB_SUBNET_SECONDARY_1_ID=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSubnet1Id'].OutputValue" --output text)
+    - export DB_SUBNET_SECONDARY_2_ID=$(aws cloudformation describe-stacks --stack-name VpcStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSubnet2Id'].OutputValue" --output text)
+    - export DB_SG_PRIMARY_ID=$(aws cloudformation describe-stacks --stack-name SgStackPrimary --region $AWS_PRIMARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSgId'].OutputValue" --output text)
+    - export DB_SG_SECONDARY_ID=$(aws cloudformation describe-stacks --stack-name SgStackSecondary --region $AWS_SECONDARY_REGION --query "Stacks[0].Outputs[?OutputKey=='DbSgId'].OutputValue" --output text)
     - cdk synth RdsStackPrimary RdsStackSecondary
-    - aws cloudformation deploy --template-file cdk.out/RdsStackPrimary.template.json --stack-name RdsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION
-    - aws cloudformation deploy --template-file cdk.out/RdsStackSecondary.template.json --stack-name RdsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION
+    - clean_rollback RdsStackPrimary $AWS_PRIMARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/RdsStackPrimary.template.json --stack-name RdsStackPrimary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_PRIMARY_REGION --parameter-overrides DbSubnet1Id=$DB_SUBNET_PRIMARY_1_ID DbSubnet2Id=$DB_SUBNET_PRIMARY_2_ID DbSgId=$DB_SG_PRIMARY_ID "DbPassword=$DB_PASSWORD"
+    - clean_rollback RdsStackSecondary $AWS_SECONDARY_REGION
+    - aws cloudformation deploy --template-file cdk.out/RdsStackSecondary.template.json --stack-name RdsStackSecondary --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset --region $AWS_SECONDARY_REGION --parameter-overrides DbSubnet1Id=$DB_SUBNET_SECONDARY_1_ID DbSubnet2Id=$DB_SUBNET_SECONDARY_2_ID DbSgId=$DB_SG_SECONDARY_ID "DbPassword=$DB_PASSWORD"
   only:
     changes:
       - infra/stacks/rds_stack.py
+
+# ============================================================
+# DR : snapshot du Primary us-east-1 copié vers us-west-2
+# Contournement de la restriction Read Replica cross-region (AWS Student)
+# Déclenchement : planifié (CI/CD > Schedules) ou manuel
+# ============================================================
+replicate-db-snapshot:
+  image: nikolaik/python-nodejs:python3.13-nodejs20
+  stage: deploy-database
+  resource_group: aws-deploy
+  before_script:
+    - pip install awscli --quiet
+  script:
+    - TS=$(date +%Y%m%d-%H%M%S)
+    - SNAP_ID="wordpress-primary-snap-$TS"
+    # 1. Snapshot du Primary
+    - echo "Creation snapshot $SNAP_ID..."
+    - aws rds create-db-snapshot --db-instance-identifier wordpress-rds-primary --db-snapshot-identifier $SNAP_ID --region $AWS_PRIMARY_REGION
+    - aws rds wait db-snapshot-available --db-snapshot-identifier $SNAP_ID --region $AWS_PRIMARY_REGION
+    # 2. Copie cross-region vers us-west-2
+    - echo "Copie vers $AWS_SECONDARY_REGION..."
+    - SRC_ARN="arn:aws:rds:${AWS_PRIMARY_REGION}:${AWS_ACCOUNT_ID}:snapshot:${SNAP_ID}"
+    - aws rds copy-db-snapshot --source-db-snapshot-identifier $SRC_ARN --target-db-snapshot-identifier $SNAP_ID --region $AWS_SECONDARY_REGION
+    - aws rds wait db-snapshot-available --db-snapshot-identifier $SNAP_ID --region $AWS_SECONDARY_REGION
+    - echo "Snapshot $SNAP_ID disponible dans les 2 regions."
+    # 3. Retention : garde les 3 derniers snapshots dans chaque region
+    - |
+      for REGION in $AWS_PRIMARY_REGION $AWS_SECONDARY_REGION; do
+        OLD=$(aws rds describe-db-snapshots --region $REGION --snapshot-type manual \
+          --query "reverse(sort_by(DBSnapshots[?starts_with(DBSnapshotIdentifier, 'wordpress-primary-snap-')], &SnapshotCreateTime))[3:].DBSnapshotIdentifier" \
+          --output text)
+        for S in $OLD; do
+          echo "Suppression ancien snapshot $S dans $REGION"
+          aws rds delete-db-snapshot --db-snapshot-identifier "$S" --region "$REGION"
+        done
+      done
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - when: manual
+      allow_failure: true
