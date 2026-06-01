@@ -4,7 +4,7 @@ from constructs import Construct
 
 
 class SgStackPrimary(Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, vpc_stack, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         vpc_id = os.getenv("VPC_PRIMARY_ID")
@@ -83,7 +83,7 @@ class SgStackPrimary(Stack):
 
 
 class SgStackSecondary(Stack):
-    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
+    def __init__(self, scope: Construct, construct_id: str, vpc_stack, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         vpc_id = os.getenv("VPC_SECONDARY_ID")
