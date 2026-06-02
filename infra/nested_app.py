@@ -17,7 +17,7 @@ account_id = os.getenv("AWS_ACCOUNT_ID")
 # et permet de specifier le bucket d'assets.
 def make_synth(bucket: str):
     return cdk.CliCredentialsStackSynthesizer(
-        file_asset_bucket_name=bucket,
+        file_assets_bucket_name=bucket,
     )
 
 InfraStack(app, "InfraPrimaryStack",
