@@ -73,6 +73,26 @@ class SgStackPrimary(Stack):
             description="NFS sortant vers EFS",
         )
 
+        # Egress MySQL depuis SG-Web vers SG-DB (3306)
+        ec2.CfnSecurityGroupEgress(self, "WebToDbEgress",
+            group_id=self.web_sg.ref,
+            ip_protocol="tcp",
+            from_port=3306,
+            to_port=3306,
+            destination_security_group_id=self.rds_sg.ref,
+            description="MySQL sortant vers SG-DB",
+        )
+
+        # Egress HTTPS vers internet (pull Docker/packages/Secrets Manager au boot)
+        ec2.CfnSecurityGroupEgress(self, "WebHttpsEgress",
+            group_id=self.web_sg.ref,
+            ip_protocol="tcp",
+            from_port=443,
+            to_port=443,
+            cidr_ip="0.0.0.0/0",
+            description="HTTPS VERS EXT",
+        )
+
         # Alias pour compatibilité asg_stack
         self.asg_sg = self.web_sg
 
@@ -149,6 +169,26 @@ class SgStackSecondary(Stack):
             to_port=2049,
             destination_security_group_id=self.efs_sg.ref,
             description="NFS sortant vers EFS",
+        )
+
+        # Egress MySQL depuis SG-Web vers SG-DB (3306)
+        ec2.CfnSecurityGroupEgress(self, "WebToDbEgress",
+            group_id=self.web_sg.ref,
+            ip_protocol="tcp",
+            from_port=3306,
+            to_port=3306,
+            destination_security_group_id=self.rds_sg.ref,
+            description="MySQL sortant vers SG-DB",
+        )
+
+        # Egress HTTPS vers internet (pull Docker/packages/Secrets Manager au boot)
+        ec2.CfnSecurityGroupEgress(self, "WebHttpsEgress",
+            group_id=self.web_sg.ref,
+            ip_protocol="tcp",
+            from_port=443,
+            to_port=443,
+            cidr_ip="0.0.0.0/0",
+            description="HTTPS VERS EXT",
         )
 
         self.asg_sg = self.web_sg
