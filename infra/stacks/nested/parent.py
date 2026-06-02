@@ -2,6 +2,7 @@ from aws_cdk import Stack
 from constructs import Construct
 
 from stacks.nested.vpc import VpcNested
+from stacks.nested.sg import SgNested
 
 
 class InfraStack(Stack):
@@ -24,8 +25,13 @@ class InfraStack(Stack):
             name=region_kind,
         )
 
-        # TODO etapes suivantes (une fois le VPC valide) :
-        # self.sg  = SgNested(self, "Sg", vpc=self.vpc.vpc)
+        # 2. Security Groups (nested) — recoit le vpc_id
+        self.sg = SgNested(self, "Sg",
+            vpc_id=self.vpc.vpc.vpc_id,
+            name=region_kind,
+        )
+
+        # TODO etapes suivantes :
         # self.rds = RdsNested(self, "Rds", db_subnets=[self.vpc.db_subnet_1, self.vpc.db_subnet_2], sg=self.sg.rds_sg, ...)
         # self.efs = EfsNested(self, "Efs", web_subnets=[...], sg=self.sg.efs_sg)
         # self.alb = AlbNested(self, "Alb", vpc=self.vpc.vpc, public_subnets=[...], sg=self.sg.alb_sg)
