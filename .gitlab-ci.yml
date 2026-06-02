@@ -1,4 +1,5 @@
 stages:
+  - test-nested         # PROTOTYPE nested stacks (manuel) - a retirer si on garde le separe
   - deploy-network      # VPC (avec NAT + routes) + S3 secondary
   - deploy-security     # Security Groups + S3 primary (CRR)
   - deploy-database     # RDS Primary + Secondary
@@ -6,6 +7,22 @@ stages:
   - deploy-secrets      # Secrets Manager (lit endpoint RDS)
   - deploy-loadbalancer # ALB (avant ASG car ASG importe target_group_arn)
   - deploy-compute      # EC2 + ASG (dependent de ALB, EFS, secrets)
+
+# === PROTOTYPE : valide le mecanisme nested + bucket assets + no-bootstrap ===
+# Deploie uniquement le parent VPC (us-east-1). Manuel.
+test-nested-primary:
+  image: nikolaik/python-nodejs:python3.13-nodejs20
+  stage: test-nested
+  before_script:
+    - pip install awscli aws-cdk-lib constructs --quiet
+    - npm install -g aws-cdk
+    - cd infra
+  script:
+    - cdk synth --app "python nested_app.py" InfraPrimaryStack
+    - cdk deploy --app "python nested_app.py" InfraPrimaryStack --require-approval never
+  rules:
+    - when: manual
+      allow_failure: true
 
 variables:
   AWS_DEFAULT_REGION: us-east-1
