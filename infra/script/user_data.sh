@@ -22,7 +22,7 @@ EFS_MOUNT="/mnt/efs/wordpress"
 # 1. Packages système
 # ============================================================
 yum update -y
-yum install -y docker amazon-efs-utils jq aws-cli mariadb105
+yum install -y docker amazon-efs-utils jq aws-cli mariadb
 
 # docker-compose v2 plugin
 mkdir -p /usr/local/lib/docker/cli-plugins
