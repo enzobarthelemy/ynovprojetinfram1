@@ -8,7 +8,9 @@ exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
 SECRET_DB="prod/wordpress/db"            # user applicatif WordPress (moindre privilege)
 SECRET_DB_ADMIN="prod/wordpress/db-admin" # compte master (admin) pour creer le user app
 SECRET_WP="prod/wordpress/app"
-EFS_ID="${EFS_ID}"                  # injecté par CDK au synth
+# EFS_ID et RDS_HOST sont exportes en entete par le launch template (tokens CDK)
+EFS_ID="${EFS_ID:?EFS_ID manquant}"
+RDS_HOST="${RDS_HOST:?RDS_HOST manquant}"
 WP_SITE_URL="https://example.com"   # à adapter
 
 AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
@@ -62,7 +64,8 @@ DB_ADMIN_SECRET=$(fetch_secret "$SECRET_DB_ADMIN")
 WP_SECRET=$(fetch_secret "$SECRET_WP")
 
 # User applicatif WordPress (moindre privilege)
-DB_HOST=$(echo "$DB_SECRET"     | jq -r '.host')
+# DB_HOST vient du token RDS injecte (pas du secret) => secrets decouples du RDS
+DB_HOST="$RDS_HOST"
 DB_PORT=$(echo "$DB_SECRET"     | jq -r '.port')
 DB_NAME=$(echo "$DB_SECRET"     | jq -r '.name')
 DB_USER=$(echo "$DB_SECRET"     | jq -r '.username')

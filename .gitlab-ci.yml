@@ -8,18 +8,83 @@ stages:
   - deploy-loadbalancer # ALB (avant ASG car ASG importe target_group_arn)
   - deploy-compute      # EC2 + ASG (dependent de ALB, EFS, secrets)
 
-# === PROTOTYPE : valide le mecanisme nested + bucket assets + no-bootstrap ===
-# Deploie uniquement le parent VPC (us-east-1). Manuel.
-test-nested-primary:
+# ================================================================
+# NESTED STACKS (prototype) - jobs manuels, a lancer dans l'ordre :
+#   1. nested-secrets   (cree les secrets statiques, 2 regions)
+#   2. nested-secondary (InfraSecondaryStack : cree le bucket S3 cible CRR)
+#   3. nested-primary   (InfraPrimaryStack : tout + S3 CRR vers secondary)
+# ================================================================
+.nested_base:
   image: nikolaik/python-nodejs:python3.13-nodejs20
-  stage: test-nested
   before_script:
     - pip install awscli aws-cdk-lib constructs --quiet
     - npm install -g aws-cdk
     - cd infra
+
+nested-secrets:
+  extends: .nested_base
+  stage: test-nested
+  script:
+    - |
+      WP_ADMIN_PW="${WP_ADMIN_PASSWORD:-$DB_PASSWORD}"
+      WP_DB_PW="${WP_DB_PASSWORD:-$DB_PASSWORD}"
+      WP_ADMIN_MAIL="${WP_ADMIN_EMAIL:-admin@ynov.com}"
+      # Host non inclus : injecte dans le user_data via token RDS
+      cu() { aws secretsmanager create-secret --name "$1" --secret-string "$2" --region "$3" 2>/dev/null \
+             || aws secretsmanager put-secret-value --secret-id "$1" --secret-string "$2" --region "$3" >/dev/null; echo "OK $3 $1"; }
+      for R in "$AWS_PRIMARY_REGION" "$AWS_SECONDARY_REGION"; do
+        cu "prod/wordpress/db-admin" "{\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"admin\",\"password\":\"$DB_PASSWORD\"}" "$R"
+        cu "prod/wordpress/db" "{\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"wordpress\",\"password\":\"$WP_DB_PW\"}" "$R"
+        cu "prod/wordpress/app" "{\"admin_user\":\"admin\",\"admin_password\":\"$WP_ADMIN_PW\",\"admin_email\":\"$WP_ADMIN_MAIL\"}" "$R"
+      done
+  rules:
+    - when: manual
+      allow_failure: true
+
+nested-secondary:
+  extends: .nested_base
+  stage: test-nested
+  script:
+    - cdk synth --app "python nested_app.py" InfraSecondaryStack
+    - cdk deploy --app "python nested_app.py" InfraSecondaryStack --require-approval never
+  rules:
+    - when: manual
+      allow_failure: true
+
+nested-primary:
+  extends: .nested_base
+  stage: test-nested
   script:
     - cdk synth --app "python nested_app.py" InfraPrimaryStack
     - cdk deploy --app "python nested_app.py" InfraPrimaryStack --require-approval never
+  rules:
+    - when: manual
+      allow_failure: true
+
+# DR EFS cross-region : backup EFS east -> copie vault us-west (manuel/planifie)
+nested-efs-backup-dr:
+  extends: .nested_base
+  stage: test-nested
+  script:
+    - |
+      VAULT="ynov-efs-vault"
+      ROLE="arn:aws:iam::${AWS_ACCOUNT_ID}:role/LabRole"
+      DEST_VAULT_ARN="arn:aws:backup:${AWS_SECONDARY_REGION}:${AWS_ACCOUNT_ID}:backup-vault:${VAULT}"
+
+      # ID de l'EFS primary (cree par le nested InfraPrimaryStack)
+      EFS_ID=$(aws cloudformation describe-stack-resources --stack-name InfraPrimaryStack --region $AWS_PRIMARY_REGION \
+        --query "StackResources[?ResourceType=='AWS::EFS::FileSystem'].PhysicalResourceId" --output text | head -1)
+      EFS_ARN="arn:aws:elasticfilesystem:${AWS_PRIMARY_REGION}:${AWS_ACCOUNT_ID}:file-system/${EFS_ID}"
+      echo "EFS primary = $EFS_ID"
+
+      # Backup on-demand avec copie cross-region vers us-west-2 (dans le job de backup)
+      aws backup start-backup-job \
+        --backup-vault-name "$VAULT" \
+        --resource-arn "$EFS_ARN" \
+        --iam-role-arn "$ROLE" \
+        --copy-actions "DestinationBackupVaultArn=${DEST_VAULT_ARN}" \
+        --region $AWS_PRIMARY_REGION
+      echo "Backup EFS lance + copie vers $AWS_SECONDARY_REGION ($DEST_VAULT_ARN)"
   rules:
     - when: manual
       allow_failure: true
