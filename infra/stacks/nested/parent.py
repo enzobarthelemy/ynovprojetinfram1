@@ -8,6 +8,7 @@ from stacks.nested.efs import EfsNested
 from stacks.nested.alb import AlbNested
 from stacks.nested.asg import AsgNested
 from stacks.nested.s3 import S3PrimaryNested, S3SecondaryNested
+from stacks.nested.backup import BackupVaultNested, BackupPlanNested
 
 
 class InfraStack(Stack):
@@ -67,3 +68,17 @@ class InfraStack(Stack):
             self.s3 = S3PrimaryNested(self, "S3", account_id=account_id)
         else:
             self.s3 = S3SecondaryNested(self, "S3", account_id=account_id)
+
+        # 8. AWS Backup natif (DR EFS cross-region, gere par AWS - aucun job)
+        vault_name = "ynov-efs-vault"
+        if is_primary:
+            # Plan planifie + copie cross-region vers us-west-2
+            self.backup = BackupPlanNested(self, "Backup",
+                efs_id=self.efs.file_system_id,
+                account_id=account_id,
+                vault_name=vault_name,
+                secondary_region="us-west-2")
+            self.backup.add_dependency(self.efs)
+        else:
+            # Vault destination (cible de la copie cross-region)
+            self.backup = BackupVaultNested(self, "Backup", vault_name=vault_name)

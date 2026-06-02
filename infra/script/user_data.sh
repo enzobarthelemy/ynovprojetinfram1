@@ -141,6 +141,8 @@ services:
       WORDPRESS_DB_NAME: "${DB_NAME}"
       WORDPRESS_DB_USER: "${DB_USER}"
       WORDPRESS_DB_PASSWORD: "${DB_PASS}"
+      WP_CLI_CACHE_DIR: "/tmp/.wp-cli-cache"
+      HOME: "/tmp"
     user: "33:33"
 EOF
 
