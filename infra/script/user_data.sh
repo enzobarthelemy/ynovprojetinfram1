@@ -5,10 +5,14 @@ exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
 # ============================================================
 # CONFIG — à adapter ou passer via variables CDK/SSM
 # ============================================================
-SECRET_DB="prod/wordpress/db"
+SECRET_DB="prod/wordpress/db"            # user applicatif WordPress (moindre privilege)
+SECRET_DB_ADMIN="prod/wordpress/db-admin" # compte master (admin) pour creer le user app
 SECRET_WP="prod/wordpress/app"
-EFS_ID="${EFS_ID}"                  # injecté par CDK au synth
-WP_SITE_URL="https://example.com"   # à adapter
+# EFS_ID, RDS_HOST et ALB_DNS_NAME sont exportes en entete par le launch template (tokens CDK)
+EFS_ID="${EFS_ID:?EFS_ID manquant}"
+RDS_HOST="${RDS_HOST:?RDS_HOST manquant}"
+ALB_DNS_NAME="${ALB_DNS_NAME:?ALB_DNS_NAME manquant}"
+WP_SITE_URL="http://${ALB_DNS_NAME}"
 
 AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
 COMPOSE_DIR="/opt/wordpress"
@@ -18,7 +22,7 @@ EFS_MOUNT="/mnt/efs/wordpress"
 # 1. Packages système
 # ============================================================
 yum update -y
-yum install -y docker amazon-efs-utils jq aws-cli
+yum install -y docker amazon-efs-utils jq aws-cli mariadb
 
 # docker-compose v2 plugin
 mkdir -p /usr/local/lib/docker/cli-plugins
@@ -57,17 +61,47 @@ fetch_secret() {
 }
 
 DB_SECRET=$(fetch_secret "$SECRET_DB")
+DB_ADMIN_SECRET=$(fetch_secret "$SECRET_DB_ADMIN")
 WP_SECRET=$(fetch_secret "$SECRET_WP")
 
-DB_HOST=$(echo "$DB_SECRET"     | jq -r '.host')
+# User applicatif WordPress (moindre privilege)
+# DB_HOST vient du token RDS injecte (pas du secret) => secrets decouples du RDS
+DB_HOST="$RDS_HOST"
 DB_PORT=$(echo "$DB_SECRET"     | jq -r '.port')
 DB_NAME=$(echo "$DB_SECRET"     | jq -r '.name')
 DB_USER=$(echo "$DB_SECRET"     | jq -r '.username')
 DB_PASS=$(echo "$DB_SECRET"     | jq -r '.password')
 
+# Compte master (admin) — sert uniquement a creer le user applicatif
+ADMIN_USER=$(echo "$DB_ADMIN_SECRET" | jq -r '.username')
+ADMIN_PASS=$(echo "$DB_ADMIN_SECRET" | jq -r '.password')
+
 WP_ADMIN_USER=$(echo "$WP_SECRET"  | jq -r '.admin_user')
 WP_ADMIN_PASS=$(echo "$WP_SECRET"  | jq -r '.admin_password')
 WP_ADMIN_EMAIL=$(echo "$WP_SECRET" | jq -r '.admin_email')
+
+# ============================================================
+# 3b. Creation du user applicatif WordPress (idempotent)
+#     Execute avec les creds ADMIN. Le user app n'a de droits que sur la base wordpress.
+# ============================================================
+echo "Attente disponibilite MySQL..."
+for i in $(seq 1 30); do
+  if mysqladmin ping -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" --silent 2>/dev/null; then
+    echo "MySQL repond."
+    break
+  fi
+  echo "  pas encore pret (tentative $i/30), attente 10s..."
+  sleep 10
+done
+
+echo "Creation du user applicatif '$DB_USER'..."
+mysql -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" <<SQL
+CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;
+CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
+GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';
+FLUSH PRIVILEGES;
+SQL
+echo "User applicatif pret."
 
 # ============================================================
 # 4. docker-compose.yml
@@ -75,8 +109,6 @@ WP_ADMIN_EMAIL=$(echo "$WP_SECRET" | jq -r '.admin_email')
 # ============================================================
 mkdir -p "$COMPOSE_DIR"
 cat > "$COMPOSE_DIR/docker-compose.yml" << EOF
-version: "3.9"
-
 services:
   wordpress:
     image: wordpress:latest
@@ -98,6 +130,20 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+
+  # Service WP-CLI dedie (UID 33 = www-data, respecte les droits EFS)
+  wp-cli:
+    image: wordpress:cli
+    volumes:
+      - ${EFS_MOUNT}:/var/www/html
+    environment:
+      WORDPRESS_DB_HOST: "${DB_HOST}:${DB_PORT}"
+      WORDPRESS_DB_NAME: "${DB_NAME}"
+      WORDPRESS_DB_USER: "${DB_USER}"
+      WORDPRESS_DB_PASSWORD: "${DB_PASS}"
+      WP_CLI_CACHE_DIR: "/tmp/.wp-cli-cache"
+      HOME: "/tmp"
+    user: "33:33"
 EOF
 
 chmod 600 "$COMPOSE_DIR/docker-compose.yml"
@@ -112,10 +158,10 @@ docker compose up -d
 # 6. WP-CLI : installation WordPress + WooCommerce (idempotent)
 #    Skippé sur la région secondaire (EFS en lecture seule)
 # ============================================================
-WP_CLI="docker compose exec -T wordpress wp --allow-root"
+WP_CLI="docker compose -f $COMPOSE_DIR/docker-compose.yml run --rm wp-cli wp"
 
 echo "Attente démarrage WordPress..."
-until docker compose exec -T wordpress curl -sf http://localhost > /dev/null 2>&1; do
+until docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T wordpress curl -sf http://localhost > /dev/null 2>&1; do
   sleep 5
 done
 
