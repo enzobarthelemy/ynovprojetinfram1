@@ -9,6 +9,7 @@ from stacks.nested.alb import AlbNested
 from stacks.nested.asg import AsgNested
 from stacks.nested.s3 import S3PrimaryNested, S3SecondaryNested
 from stacks.nested.backup import BackupVaultNested, BackupPlanNested
+from stacks.nested.route53 import Route53Nested
 
 
 class InfraStack(Stack):
@@ -16,13 +17,25 @@ class InfraStack(Stack):
     Stack parent (un par region) contenant tous les nested stacks.
     CloudFormation ordonne automatiquement via les dependances.
 
-    is_primary=True  -> us-east-1 : RDS Multi-AZ + S3 primary (CRR)
+    is_primary=True  -> us-east-1 : RDS Multi-AZ + S3 primary (CRR) + Route53 failover
     is_primary=False -> us-west-2 : RDS standalone + S3 secondary (cible CRR)
+
+    Le site est servi sous le FQDN web.ynov-infram1-grp1.com (Route53 failover),
+    identique dans les 2 regions pour permettre la bascule.
+    alb_dns_secondary : DNS de l'ALB secondaire, passe au primary (via contexte)
+    pour les records Route53 failover. Si absent, Route53 n'est pas cree.
     """
+
+    # FQDN public servi par WordPress (siteurl identique dans les 2 regions)
+    WEB_FQDN = "web.ynov-infram1-grp1.com"
+
+    # Hosted Zone IDs fixes des ALB par region (AWS)
+    _ALB_HZ = {"us-east-1": "Z35SXDOTRQ7X7K", "us-west-2": "Z1H1FL5HABSF5"}
 
     def __init__(self, scope: Construct, construct_id: str, *,
                  region_kind: str, cidr_prefix: str, azs: list,
-                 db_password: str, is_primary: bool, account_id: str, **kwargs) -> None:
+                 db_password: str, is_primary: bool, account_id: str,
+                 alb_dns_secondary: str | None = None, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         rds_name = "primary" if is_primary else "secondary"
@@ -61,6 +74,7 @@ class InfraStack(Stack):
             efs_id=self.efs.file_system_id,
             rds_host=self.rds.endpoint,
             alb_dns=self.alb.alb_dns,
+            site_fqdn=self.WEB_FQDN,
             name=rds_name)
 
         # 7. S3 : primaire (CRR) ou secondaire (cible) selon la region
@@ -82,3 +96,14 @@ class InfraStack(Stack):
         else:
             # Vault destination (cible de la copie cross-region)
             self.backup = BackupVaultNested(self, "Backup", vault_name=vault_name)
+
+        # 9. Route53 failover (uniquement sur le primary, si l'ALB secondaire est connu)
+        #    alb_dns_secondary est fourni au deploy via le contexte CDK (pas de ref cross-region)
+        if is_primary and alb_dns_secondary:
+            self.route53 = Route53Nested(self, "Route53",
+                alb_dns_primary=self.alb.alb_dns,
+                alb_dns_secondary=alb_dns_secondary,
+                alb_zone_id_primary=self._ALB_HZ["us-east-1"],
+                alb_zone_id_secondary=self._ALB_HZ["us-west-2"],
+                name=rds_name)
+            self.route53.add_dependency(self.alb)

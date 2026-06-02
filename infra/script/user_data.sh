@@ -8,11 +8,12 @@ exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
 SECRET_DB="prod/wordpress/db"            # user applicatif WordPress (moindre privilege)
 SECRET_DB_ADMIN="prod/wordpress/db-admin" # compte master (admin) pour creer le user app
 SECRET_WP="prod/wordpress/app"
-# EFS_ID, RDS_HOST et ALB_DNS_NAME sont exportes en entete par le launch template (tokens CDK)
+# EFS_ID, RDS_HOST, ALB_DNS_NAME, SITE_FQDN exportes en entete par le launch template (tokens CDK)
 EFS_ID="${EFS_ID:?EFS_ID manquant}"
 RDS_HOST="${RDS_HOST:?RDS_HOST manquant}"
 ALB_DNS_NAME="${ALB_DNS_NAME:?ALB_DNS_NAME manquant}"
-WP_SITE_URL="http://${ALB_DNS_NAME}"
+SITE_FQDN="${SITE_FQDN:-$ALB_DNS_NAME}"   # FQDN Route53 (failover), fallback ALB DNS
+WP_SITE_URL="http://${SITE_FQDN}"
 
 AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
 COMPOSE_DIR="/opt/wordpress"
@@ -45,9 +46,16 @@ if ! grep -q "$EFS_ID" /etc/fstab; then
   echo "$EFS_ID:/ $EFS_MOUNT efs _netdev,tls 0 0" >> /etc/fstab
 fi
 
-# Droits www-data (UID 33 = user WordPress dans le container officiel)
-chown -R 33:33 "$EFS_MOUNT"
-chmod 755 "$EFS_MOUNT"
+# Droits www-data (UID 33) — uniquement si l'EFS est accessible en ecriture
+# (un EFS cible de replication serait read-only : on saute le chown dans ce cas)
+if touch "$EFS_MOUNT/.mount_test" 2>/dev/null; then
+  rm -f "$EFS_MOUNT/.mount_test"
+  echo "EFS en Lecture-Ecriture : application des droits 33:33"
+  chown -R 33:33 "$EFS_MOUNT"
+  chmod 755 "$EFS_MOUNT"
+else
+  echo "EFS en Lecture seule : chown saute"
+fi
 
 # ============================================================
 # 3. Récupération des secrets
