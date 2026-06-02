@@ -15,7 +15,7 @@ class AlbNested(NestedStack):
         super().__init__(scope, construct_id, **kwargs)
 
         alb = elbv2.CfnLoadBalancer(self, "Alb",
-            name=f"wp-alb-{name}-nested",
+            name=f"wp-alb-{name}",
             scheme="internet-facing",
             type="application",
             security_groups=[alb_sg_id],
@@ -23,7 +23,7 @@ class AlbNested(NestedStack):
         )
 
         tg = elbv2.CfnTargetGroup(self, "TargetGroup",
-            name=f"wp-tg-{name}-nested",
+            name=f"wp-tg-{name}",
             port=80,
             protocol="HTTP",
             vpc_id=vpc_id,
