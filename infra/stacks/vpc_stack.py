@@ -25,14 +25,12 @@ class VpcStackPrimary(Stack):
         igw_prod = ec2.CfnInternetGateway(self, "ProdIGW")
         ec2.CfnVPCGatewayAttachment(
             self, "ProdIGWAttachment",
-            vpc_id=self.vpc_prod.vpc_id, 
             vpc_id=self.vpc_prod.vpc_id,
             internet_gateway_id=igw_prod.attr_internet_gateway_id
         )
 
         self.sub_public_1_prod = ec2.PublicSubnet(
             self, "ProdPublicSubnetAZ1",
-            vpc_id=self.vpc_prod.vpc_id, 
             vpc_id=self.vpc_prod.vpc_id,
             availability_zone="us-east-1a",
             cidr_block="10.0.1.0/24",
@@ -40,7 +38,6 @@ class VpcStackPrimary(Stack):
         )
         self.sub_public_2_prod = ec2.PublicSubnet(
             self, "ProdPublicSubnetAZ2",
-            vpc_id=self.vpc_prod.vpc_id, 
             vpc_id=self.vpc_prod.vpc_id,
             availability_zone="us-east-1b",
             cidr_block="10.0.2.0/24",
@@ -60,21 +57,18 @@ class VpcStackPrimary(Stack):
         
         self.sub_private_1_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetWebAZ1",
-            vpc_id=self.vpc_prod.vpc_id, 
             vpc_id=self.vpc_prod.vpc_id,
             availability_zone="us-east-1a",
             cidr_block="10.0.11.0/24"
         )
         self.sub_private_2_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetWebAZ2",
-            vpc_id=self.vpc_prod.vpc_id, 
             vpc_id=self.vpc_prod.vpc_id,
             availability_zone="us-east-1b",
             cidr_block="10.0.12.0/24"
         )
         self.sub_private_3_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetDBAZ1",
-            vpc_id=self.vpc_prod.vpc_id, 
             vpc_id=self.vpc_prod.vpc_id,
             availability_zone="us-east-1a",
             cidr_block="10.0.21.0/24"
@@ -82,7 +76,6 @@ class VpcStackPrimary(Stack):
         self.sub_private_4_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetDBAZ2",
 
-            vpc_id=self.vpc_prod.vpc_id, 
             vpc_id=self.vpc_prod.vpc_id,
             availability_zone="us-east-1b",
             cidr_block="10.0.22.0/24"
@@ -138,7 +131,6 @@ class VpcStackSecondary(Stack):
             self, "BackupPublicSubnetAZ1",
 
             vpc_id=self.vpc_backup.vpc_id,
-            vpc_id=self.vpc_backup.vpc_id, # Corrigé
             availability_zone="us-west-2a",
             cidr_block="10.1.1.0/24",
             map_public_ip_on_launch=True
@@ -146,8 +138,7 @@ class VpcStackSecondary(Stack):
         self.sub_public_2_backup = ec2.PublicSubnet(
             self, "BackupPublicSubnetAZ2",
 
-            vpc_id=self.vpc_backup.vpc_id, 
-            vpc_id=self.vpc_backup.vpc_id, # Corrigé
+            vpc_id=self.vpc_backup.vpc_id,
             availability_zone="us-west-2b",
             cidr_block="10.1.2.0/24",
             map_public_ip_on_launch=True
@@ -168,7 +159,6 @@ class VpcStackSecondary(Stack):
             self, "BackupPrivateSubnetWebAZ1",
 
             vpc_id=self.vpc_backup.vpc_id, 
-            vpc_id=self.vpc_backup.vpc_id, # Corrigé
             availability_zone="us-west-2a",
             cidr_block="10.1.11.0/24"
         )
@@ -176,7 +166,6 @@ class VpcStackSecondary(Stack):
             self, "BackupPrivateSubnetWebAZ2",
 
             vpc_id=self.vpc_backup.vpc_id, 
-            vpc_id=self.vpc_backup.vpc_id, # Corrigé
             availability_zone="us-west-2b",
             cidr_block="10.1.12.0/24"
         )
@@ -184,14 +173,12 @@ class VpcStackSecondary(Stack):
             self, "BackupPrivateSubnetDBAZ1",
 
             vpc_id=self.vpc_backup.vpc_id, 
-            vpc_id=self.vpc_backup.vpc_id, # Corrigé
             availability_zone="us-west-2a",
             cidr_block="10.1.21.0/24"
         )
         self.sub_private_4_backup = ec2.PrivateSubnet(
             self, "BackupPrivateSubnetDBAZ2",
             vpc_id=self.vpc_backup.vpc_id, 
-            vpc_id=self.vpc_backup.vpc_id,
             availability_zone="us-west-2b",
             cidr_block="10.1.22.0/24"
         )
