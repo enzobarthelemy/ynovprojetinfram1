@@ -20,14 +20,14 @@ class InfraStack(Stack):
     is_primary=True  -> us-east-1 : RDS Multi-AZ + S3 primary (CRR) + Route53 failover
     is_primary=False -> us-west-2 : RDS standalone + S3 secondary (cible CRR)
 
-    Le site est servi sous le FQDN web.ynov-infram1-grp1.com (Route53 failover),
+    Le site est servi sous le FQDN sub.ynov-infram1-grp1.com (Route53 failover),
     identique dans les 2 regions pour permettre la bascule.
-    alb_dns_secondary : DNS de l'ALB secondaire, passe au primary (via contexte)
-    pour les records Route53 failover. Si absent, Route53 n'est pas cree.
+    alb_dns_secondary : DNS de l'ALB secondaire, passe au primary (via contexte).
+    Route53 (zone + strategie failover) n'est cree que si alb_dns_secondary est fourni.
     """
 
     # FQDN public servi par WordPress (siteurl identique dans les 2 regions)
-    WEB_FQDN = "web.ynov-infram1-grp1.com"
+    WEB_FQDN = "sub.ynov-infram1-grp1.com"
 
     # Hosted Zone IDs fixes des ALB par region (AWS)
     _ALB_HZ = {"us-east-1": "Z35SXDOTRQ7X7K", "us-west-2": "Z1H1FL5HABSF5"}
@@ -97,8 +97,8 @@ class InfraStack(Stack):
             # Vault destination (cible de la copie cross-region)
             self.backup = BackupVaultNested(self, "Backup", vault_name=vault_name)
 
-        # 9. Route53 failover (uniquement sur le primary, si l'ALB secondaire est connu)
-        #    alb_dns_secondary est fourni au deploy via le contexte CDK (pas de ref cross-region)
+        # 9. Route53 (primary uniquement) : cree la hosted zone + strategie failover.
+        #    alb_dns_secondary fourni au deploy via le contexte CDK (pas de ref cross-region).
         if is_primary and alb_dns_secondary:
             self.route53 = Route53Nested(self, "Route53",
                 alb_dns_primary=self.alb.alb_dns,

@@ -8,15 +8,15 @@ from constructs import Construct
 
 class Route53Nested(NestedStack):
     """
-    Route 53 - Hosted zone publique ynov-infram1-grp1.com + Failover sur web.ynov-infram1-grp1.com.
+    Cree la hosted zone publique ynov-infram1-grp1.com ET la strategie de trafic
+    Failover sur sub.ynov-infram1-grp1.com.
 
     PRIMARY   -> ALB us-east-1
     SECONDARY -> ALB us-west-2
     Health checks HTTP sur chaque ALB : bascule auto vers SECONDARY si PRIMARY unhealthy.
-
-    Les Hosted Zone IDs des ALB sont fixes par region AWS :
-    https://docs.aws.amazon.com/general/latest/gr/elb.html
     """
+
+    FQDN = "sub.ynov-infram1-grp1.com"
 
     def __init__(self, scope: Construct, construct_id: str, *,
                  alb_dns_primary: str, alb_dns_secondary: str,
@@ -49,10 +49,10 @@ class Route53Nested(NestedStack):
                 key="Name", value=f"hc-secondary-{name}")],
         )
 
-        # 3. Record Failover PRIMARY (Alias vers ALB us-east-1)
+        # 3. Strategie de trafic - enregistrement Failover PRIMARY (Alias ALB us-east-1)
         route53.CfnRecordSet(self, "FailoverRecordPrimary",
             hosted_zone_id=hosted_zone.ref,
-            name="web.ynov-infram1-grp1.com",
+            name=self.FQDN,
             type="A",
             alias_target=route53.CfnRecordSet.AliasTargetProperty(
                 dns_name=alb_dns_primary, hosted_zone_id=alb_zone_id_primary,
@@ -62,10 +62,10 @@ class Route53Nested(NestedStack):
             health_check_id=hc_primary.ref,
         )
 
-        # 4. Record Failover SECONDARY (Alias vers ALB us-west-2)
+        # 4. Strategie de trafic - enregistrement Failover SECONDARY (Alias ALB us-west-2)
         route53.CfnRecordSet(self, "FailoverRecordSecondary",
             hosted_zone_id=hosted_zone.ref,
-            name="web.ynov-infram1-grp1.com",
+            name=self.FQDN,
             type="A",
             alias_target=route53.CfnRecordSet.AliasTargetProperty(
                 dns_name=alb_dns_secondary, hosted_zone_id=alb_zone_id_secondary,
@@ -76,8 +76,9 @@ class Route53Nested(NestedStack):
         )
 
         self.hosted_zone_id = hosted_zone.ref
-        self.web_fqdn = "web.ynov-infram1-grp1.com"
+        self.web_fqdn = self.FQDN
 
         CfnOutput(self, "HostedZoneId", value=hosted_zone.ref)
-        CfnOutput(self, "WebRecordFQDN", value="web.ynov-infram1-grp1.com")
-        CfnOutput(self, "NameServers", value="Voir console Route53 - a deleguer chez le registrar")
+        CfnOutput(self, "WebRecordFQDN", value=self.FQDN)
+        CfnOutput(self, "NameServers",
+            value="Voir Route53 console (DelegationSet) - a deleguer chez le registrar")
