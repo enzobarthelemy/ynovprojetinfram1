@@ -25,32 +25,23 @@ class VpcStackPrimary(Stack):
         igw_prod = ec2.CfnInternetGateway(self, "ProdIGW")
         ec2.CfnVPCGatewayAttachment(
             self, "ProdIGWAttachment",
-<<<<<<< HEAD
             vpc_id=self.vpc_prod.vpc_id, 
-=======
             vpc_id=self.vpc_prod.vpc_id,
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             internet_gateway_id=igw_prod.attr_internet_gateway_id
         )
 
         self.sub_public_1_prod = ec2.PublicSubnet(
             self, "ProdPublicSubnetAZ1",
-<<<<<<< HEAD
             vpc_id=self.vpc_prod.vpc_id, 
-=======
             vpc_id=self.vpc_prod.vpc_id,
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-east-1a",
             cidr_block="10.0.1.0/24",
             map_public_ip_on_launch=True
         )
         self.sub_public_2_prod = ec2.PublicSubnet(
             self, "ProdPublicSubnetAZ2",
-<<<<<<< HEAD
             vpc_id=self.vpc_prod.vpc_id, 
-=======
             vpc_id=self.vpc_prod.vpc_id,
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-east-1b",
             cidr_block="10.0.2.0/24",
             map_public_ip_on_launch=True
@@ -69,46 +60,35 @@ class VpcStackPrimary(Stack):
         
         self.sub_private_1_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetWebAZ1",
-<<<<<<< HEAD
             vpc_id=self.vpc_prod.vpc_id, 
-=======
             vpc_id=self.vpc_prod.vpc_id,
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-east-1a",
             cidr_block="10.0.11.0/24"
         )
         self.sub_private_2_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetWebAZ2",
-<<<<<<< HEAD
             vpc_id=self.vpc_prod.vpc_id, 
-=======
             vpc_id=self.vpc_prod.vpc_id,
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-east-1b",
             cidr_block="10.0.12.0/24"
         )
         self.sub_private_3_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetDBAZ1",
-<<<<<<< HEAD
             vpc_id=self.vpc_prod.vpc_id, 
-=======
             vpc_id=self.vpc_prod.vpc_id,
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-east-1a",
             cidr_block="10.0.21.0/24"
         )
         self.sub_private_4_prod = ec2.PrivateSubnet(
             self, "ProdPrivateSubnetDBAZ2",
-<<<<<<< HEAD
+
             vpc_id=self.vpc_prod.vpc_id, 
-=======
             vpc_id=self.vpc_prod.vpc_id,
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-east-1b",
             cidr_block="10.0.22.0/24"
         )
 
-<<<<<<< HEAD
+
         # AJOUT CRITIQUE : Endpoint S3 pour les sous-réseaux privés
         self.vpc_prod.add_gateway_endpoint(
             "S3EndpointPrimary",
@@ -116,7 +96,6 @@ class VpcStackPrimary(Stack):
             subnets=[ec2.SubnetSelection(subnets=[self.sub_private_1_prod, self.sub_private_2_prod])]
         )
         
-=======
         self.vpc = self.vpc_prod
         self.web_subnet_1 = sub_private_1_prod
         self.web_subnet_2 = sub_private_2_prod
@@ -131,7 +110,6 @@ class VpcStackPrimary(Stack):
         CfnOutput(self, "PublicSubnet1Id", value=sub_public_1_prod.subnet_id)
         CfnOutput(self, "PublicSubnet2Id", value=sub_public_2_prod.subnet_id)
 
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
 
 class VpcStackSecondary(Stack):
 
@@ -158,22 +136,18 @@ class VpcStackSecondary(Stack):
 
         self.sub_public_1_backup = ec2.PublicSubnet(
             self, "BackupPublicSubnetAZ1",
-<<<<<<< HEAD
+
             vpc_id=self.vpc_backup.vpc_id,
-=======
             vpc_id=self.vpc_backup.vpc_id, # Corrigé
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-west-2a",
             cidr_block="10.1.1.0/24",
             map_public_ip_on_launch=True
         )
         self.sub_public_2_backup = ec2.PublicSubnet(
             self, "BackupPublicSubnetAZ2",
-<<<<<<< HEAD
+
             vpc_id=self.vpc_backup.vpc_id, 
-=======
             vpc_id=self.vpc_backup.vpc_id, # Corrigé
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-west-2b",
             cidr_block="10.1.2.0/24",
             map_public_ip_on_launch=True
@@ -192,53 +166,44 @@ class VpcStackSecondary(Stack):
         
         self.sub_private_1_backup = ec2.PrivateSubnet(
             self, "BackupPrivateSubnetWebAZ1",
-<<<<<<< HEAD
+
             vpc_id=self.vpc_backup.vpc_id, 
-=======
             vpc_id=self.vpc_backup.vpc_id, # Corrigé
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-west-2a",
             cidr_block="10.1.11.0/24"
         )
         self.sub_private_2_backup = ec2.PrivateSubnet(
             self, "BackupPrivateSubnetWebAZ2",
-<<<<<<< HEAD
+
             vpc_id=self.vpc_backup.vpc_id, 
-=======
             vpc_id=self.vpc_backup.vpc_id, # Corrigé
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-west-2b",
             cidr_block="10.1.12.0/24"
         )
         self.sub_private_3_backup = ec2.PrivateSubnet(
             self, "BackupPrivateSubnetDBAZ1",
-<<<<<<< HEAD
+
             vpc_id=self.vpc_backup.vpc_id, 
-=======
             vpc_id=self.vpc_backup.vpc_id, # Corrigé
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-west-2a",
             cidr_block="10.1.21.0/24"
         )
         self.sub_private_4_backup = ec2.PrivateSubnet(
             self, "BackupPrivateSubnetDBAZ2",
-<<<<<<< HEAD
             vpc_id=self.vpc_backup.vpc_id, 
-=======
             vpc_id=self.vpc_backup.vpc_id,
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
             availability_zone="us-west-2b",
             cidr_block="10.1.22.0/24"
         )
 
-<<<<<<< HEAD
+
         # AJOUT CRITIQUE : Endpoint S3 pour les sous-réseaux privés
         self.vpc_backup.add_gateway_endpoint(
             "S3EndpointSecondary",
             service=ec2.GatewayVpcEndpointAwsService.S3,
             subnets=[ec2.SubnetSelection(subnets=[self.sub_private_1_backup, self.sub_private_2_backup])]
         )
-=======
+
         self.vpc = self.vpc_backup
         self.web_subnet_1 = sub_private_1_backup
         self.web_subnet_2 = sub_private_2_backup
@@ -252,4 +217,3 @@ class VpcStackSecondary(Stack):
         CfnOutput(self, "WebSubnet2Id", value=sub_private_2_backup.subnet_id)
         CfnOutput(self, "PublicSubnet1Id", value=sub_public_1_backup.subnet_id)
         CfnOutput(self, "PublicSubnet2Id", value=sub_public_2_backup.subnet_id)
->>>>>>> 1accd7f84eb95324fdd4a6691c0a9134334042b5
