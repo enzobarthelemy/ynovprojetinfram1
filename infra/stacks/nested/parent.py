@@ -59,6 +59,7 @@ class InfraStack(Stack):
             target_group_arn=self.alb.target_group_arn,
             efs_id=self.efs.file_system_id,
             rds_host=self.rds.endpoint,
+            alb_dns=self.alb.alb_dns,
             name=rds_name)
 
         # 7. S3 : primaire (CRR) ou secondaire (cible) selon la region

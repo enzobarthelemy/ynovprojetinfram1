@@ -8,10 +8,11 @@ exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
 SECRET_DB="prod/wordpress/db"            # user applicatif WordPress (moindre privilege)
 SECRET_DB_ADMIN="prod/wordpress/db-admin" # compte master (admin) pour creer le user app
 SECRET_WP="prod/wordpress/app"
-# EFS_ID et RDS_HOST sont exportes en entete par le launch template (tokens CDK)
+# EFS_ID, RDS_HOST et ALB_DNS_NAME sont exportes en entete par le launch template (tokens CDK)
 EFS_ID="${EFS_ID:?EFS_ID manquant}"
 RDS_HOST="${RDS_HOST:?RDS_HOST manquant}"
-WP_SITE_URL="https://example.com"   # à adapter
+ALB_DNS_NAME="${ALB_DNS_NAME:?ALB_DNS_NAME manquant}"
+WP_SITE_URL="http://${ALB_DNS_NAME}"
 
 AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
 COMPOSE_DIR="/opt/wordpress"
@@ -108,8 +109,6 @@ echo "User applicatif pret."
 # ============================================================
 mkdir -p "$COMPOSE_DIR"
 cat > "$COMPOSE_DIR/docker-compose.yml" << EOF
-version: "3.9"
-
 services:
   wordpress:
     image: wordpress:latest
@@ -131,6 +130,18 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+
+  # Service WP-CLI dedie (UID 33 = www-data, respecte les droits EFS)
+  wp-cli:
+    image: wordpress:cli
+    volumes:
+      - ${EFS_MOUNT}:/var/www/html
+    environment:
+      WORDPRESS_DB_HOST: "${DB_HOST}:${DB_PORT}"
+      WORDPRESS_DB_NAME: "${DB_NAME}"
+      WORDPRESS_DB_USER: "${DB_USER}"
+      WORDPRESS_DB_PASSWORD: "${DB_PASS}"
+    user: "33:33"
 EOF
 
 chmod 600 "$COMPOSE_DIR/docker-compose.yml"
@@ -145,10 +156,10 @@ docker compose up -d
 # 6. WP-CLI : installation WordPress + WooCommerce (idempotent)
 #    Skippé sur la région secondaire (EFS en lecture seule)
 # ============================================================
-WP_CLI="docker compose exec -T wordpress wp --allow-root"
+WP_CLI="docker compose -f $COMPOSE_DIR/docker-compose.yml run --rm wp-cli wp"
 
 echo "Attente démarrage WordPress..."
-until docker compose exec -T wordpress curl -sf http://localhost > /dev/null 2>&1; do
+until docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T wordpress curl -sf http://localhost > /dev/null 2>&1; do
   sleep 5
 done
 

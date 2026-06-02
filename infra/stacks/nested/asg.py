@@ -9,9 +9,9 @@ from aws_cdk import (
 from constructs import Construct
 
 
-def _build_user_data(efs_id, rds_host):
+def _build_user_data(efs_id, rds_host, alb_dns):
     """
-    Construit le user_data en injectant EFS_ID et RDS_HOST via tokens CDK (Fn.join).
+    Construit le user_data en injectant EFS_ID, RDS_HOST et ALB_DNS_NAME via tokens CDK (Fn.join).
     Le script lit ces valeurs en variables d'env (exportees dans l'entete).
     Les variables bash ${...} du script restent intactes (pas de Fn.sub).
     """
@@ -27,6 +27,7 @@ def _build_user_data(efs_id, rds_host):
         "#!/bin/bash\n",
         "export EFS_ID='", efs_id, "'\n",
         "export RDS_HOST='", rds_host, "'\n",
+        "export ALB_DNS_NAME='", alb_dns, "'\n",
         body,
     ]))
 
@@ -39,11 +40,11 @@ class AsgNested(NestedStack):
 
     def __init__(self, scope: Construct, construct_id: str, *,
                  web_subnet_ids: list, asg_sg_id: str, target_group_arn: str,
-                 efs_id: str, rds_host: str, name: str, **kwargs) -> None:
+                 efs_id: str, rds_host: str, alb_dns: str, name: str, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         account_id = self.account
-        user_data_b64 = _build_user_data(efs_id, rds_host)
+        user_data_b64 = _build_user_data(efs_id, rds_host, alb_dns)
 
         lt = ec2.CfnLaunchTemplate(self, "LaunchTemplate",
             launch_template_data=ec2.CfnLaunchTemplate.LaunchTemplateDataProperty(
