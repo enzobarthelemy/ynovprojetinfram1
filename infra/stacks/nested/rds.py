@@ -21,7 +21,7 @@ class RdsNested(NestedStack):
         )
 
         self.db = rds.CfnDBInstance(self, "Rds",
-            db_instance_identifier=f"wordpress-rds-{name}",
+            db_instance_identifier=f"wordpress-rds-{name}-nested",
             db_name="wordpress",
             db_instance_class="db.t3.micro",
             engine="mysql",

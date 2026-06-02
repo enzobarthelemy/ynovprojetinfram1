@@ -10,7 +10,7 @@ class S3SecondaryNested(NestedStack):
         super().__init__(scope, construct_id, **kwargs)
 
         self.bucket = s3.CfnBucket(self, "SecondaryBucket",
-            bucket_name=f"ynov-wordpress-secondary-{account_id}",
+            bucket_name=f"ynov-wordpress-secondary-nested-{account_id}",
             versioning_configuration=s3.CfnBucket.VersioningConfigurationProperty(status="Enabled"),
         )
 
@@ -23,10 +23,10 @@ class S3PrimaryNested(NestedStack):
         super().__init__(scope, construct_id, **kwargs)
 
         lab_role_arn = f"arn:aws:iam::{account_id}:role/LabRole"
-        secondary_bucket_arn = f"arn:aws:s3:::ynov-wordpress-secondary-{account_id}"
+        secondary_bucket_arn = f"arn:aws:s3:::ynov-wordpress-secondary-nested-{account_id}"
 
         self.bucket = s3.CfnBucket(self, "PrimaryBucket",
-            bucket_name=f"ynov-wordpress-primary-{account_id}",
+            bucket_name=f"ynov-wordpress-primary-nested-{account_id}",
             versioning_configuration=s3.CfnBucket.VersioningConfigurationProperty(status="Enabled"),
             replication_configuration=s3.CfnBucket.ReplicationConfigurationProperty(
                 role=lab_role_arn,
