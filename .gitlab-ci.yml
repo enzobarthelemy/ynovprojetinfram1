@@ -59,7 +59,10 @@ deploy-primary:
   extends: .base
   stage: deploy-primary
   script:
-    - cdk deploy InfraPrimaryStack --require-approval never
+    # Recupere le DNS de l'ALB secondaire (deja deploye) pour les records Route53 failover
+    - export ALB_DNS_SECONDARY=$(aws elbv2 describe-load-balancers --names wp-alb-secondary --region $AWS_SECONDARY_REGION --query "LoadBalancers[0].DNSName" --output text)
+    - echo "ALB secondaire = $ALB_DNS_SECONDARY"
+    - cdk deploy InfraPrimaryStack --require-approval never -c alb_dns_secondary="$ALB_DNS_SECONDARY"
   rules:
     - if: '$CI_COMMIT_BRANCH'
       changes:
