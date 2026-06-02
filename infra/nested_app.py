@@ -12,11 +12,11 @@ app = cdk.App()
 
 account_id = os.getenv("AWS_ACCOUNT_ID")
 
-# Synthesizer avec bucket d'assets (requis pour les templates des nested stacks)
+# Synthesizer avec bucket d'assets (requis pour les templates des nested stacks).
+# CliCredentialsStackSynthesizer : utilise les creds du CI directement (pas de bootstrap)
+# et permet de specifier le bucket d'assets.
 def make_synth(bucket: str):
-    return cdk.BootstraplessSynthesizer(
-        cloud_formation_execution_role_arn=f"arn:aws:iam::{account_id}:role/LabRole",
-        deploy_role_arn=f"arn:aws:iam::{account_id}:role/LabRole",
+    return cdk.CliCredentialsStackSynthesizer(
         file_asset_bucket_name=bucket,
     )
 
