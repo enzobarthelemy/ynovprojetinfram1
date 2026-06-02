@@ -5,7 +5,8 @@ exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
 # ============================================================
 # CONFIG — à adapter ou passer via variables CDK/SSM
 # ============================================================
-SECRET_DB="prod/wordpress/db"
+SECRET_DB="prod/wordpress/db"            # user applicatif WordPress (moindre privilege)
+SECRET_DB_ADMIN="prod/wordpress/db-admin" # compte master (admin) pour creer le user app
 SECRET_WP="prod/wordpress/app"
 EFS_ID="${EFS_ID}"                  # injecté par CDK au synth
 WP_SITE_URL="https://example.com"   # à adapter
@@ -18,7 +19,7 @@ EFS_MOUNT="/mnt/efs/wordpress"
 # 1. Packages système
 # ============================================================
 yum update -y
-yum install -y docker amazon-efs-utils jq aws-cli
+yum install -y docker amazon-efs-utils jq aws-cli mariadb105
 
 # docker-compose v2 plugin
 mkdir -p /usr/local/lib/docker/cli-plugins
@@ -57,17 +58,46 @@ fetch_secret() {
 }
 
 DB_SECRET=$(fetch_secret "$SECRET_DB")
+DB_ADMIN_SECRET=$(fetch_secret "$SECRET_DB_ADMIN")
 WP_SECRET=$(fetch_secret "$SECRET_WP")
 
+# User applicatif WordPress (moindre privilege)
 DB_HOST=$(echo "$DB_SECRET"     | jq -r '.host')
 DB_PORT=$(echo "$DB_SECRET"     | jq -r '.port')
 DB_NAME=$(echo "$DB_SECRET"     | jq -r '.name')
 DB_USER=$(echo "$DB_SECRET"     | jq -r '.username')
 DB_PASS=$(echo "$DB_SECRET"     | jq -r '.password')
 
+# Compte master (admin) — sert uniquement a creer le user applicatif
+ADMIN_USER=$(echo "$DB_ADMIN_SECRET" | jq -r '.username')
+ADMIN_PASS=$(echo "$DB_ADMIN_SECRET" | jq -r '.password')
+
 WP_ADMIN_USER=$(echo "$WP_SECRET"  | jq -r '.admin_user')
 WP_ADMIN_PASS=$(echo "$WP_SECRET"  | jq -r '.admin_password')
 WP_ADMIN_EMAIL=$(echo "$WP_SECRET" | jq -r '.admin_email')
+
+# ============================================================
+# 3b. Creation du user applicatif WordPress (idempotent)
+#     Execute avec les creds ADMIN. Le user app n'a de droits que sur la base wordpress.
+# ============================================================
+echo "Attente disponibilite MySQL..."
+for i in $(seq 1 30); do
+  if mysqladmin ping -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" --silent 2>/dev/null; then
+    echo "MySQL repond."
+    break
+  fi
+  echo "  pas encore pret (tentative $i/30), attente 10s..."
+  sleep 10
+done
+
+echo "Creation du user applicatif '$DB_USER'..."
+mysql -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" <<SQL
+CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;
+CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
+GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';
+FLUSH PRIVILEGES;
+SQL
+echo "User applicatif pret."
 
 # ============================================================
 # 4. docker-compose.yml

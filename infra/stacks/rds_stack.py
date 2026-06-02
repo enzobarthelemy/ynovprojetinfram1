@@ -28,6 +28,7 @@ class RdsStackPrimary(Stack):
         # AWS gère le Standby en us-east-1b de manière transparente
         db = rds.CfnDBInstance(self, "RdsPrimary",
             db_instance_identifier="wordpress-rds-primary",
+            db_name="wordpress",
             db_instance_class="db.t3.micro",
             engine="mysql",
             engine_version="8.0",
@@ -75,6 +76,7 @@ class RdsStackSecondary(Stack):
         # Instance MySQL standalone (pas de Multi-AZ pour limiter les coûts Student)
         db = rds.CfnDBInstance(self, "RdsSecondary",
             db_instance_identifier="wordpress-rds-secondary",
+            db_name="wordpress",
             db_instance_class="db.t3.micro",
             engine="mysql",
             engine_version="8.0",
