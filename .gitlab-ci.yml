@@ -4,10 +4,16 @@
 #   Deploy (RUN_MODE vide, sur push infra/**/* ou Run pipeline) -> 2 SITES UP :
 #     secrets -> deploy-secondary (pass1) -> deploy-primary (east complet)
 #     -> seed-west (DB west restauree d'un snapshot east) -> secondary-compute (EFS replica + ASG west)
-#     Re-jouer ce deploy = FAILBACK : east reprend la main, west re-synchronise, 2 sites cohabitent.
 #
 #   RUN_MODE=failover -> east KO : promotion de l'EFS replica west (writable) + refresh ASG west.
 #                        Route53 (failover routing) bascule le trafic sur west automatiquement.
+#
+#   RUN_MODE=failback -> retour vers east AVEC rapatriement des donnees ecrites sur west
+#                        pendant la panne (voie snapshot inverse, sans SSM) :
+#     failback-rds : snapshot wordpress-rds-secondary (west) -> copie east -> restaure wordpress-rds-failback
+#     failback-efs : replication EFS inverse west->east -> redeploie east (monte le replica,
+#                    supprime wordpress-rds-primary) -> promotion -> refresh ASG east.
+#     (east tourne ensuite sur wordpress-rds-failback : drift de nommage assume.)
 #
 #   rds-snapshot-dr   -> snapshot east + copie cross-region west (planifie horaire / manuel).
 #
@@ -23,12 +29,14 @@ stages:
   - secondary-compute        # Pass 2 : EFS replica + ASG west (sert la copie repliquee)
   - dr                       # snapshot RDS cross-region (planifie / manuel)
   - failover                 # east KO -> promotion EFS west (RUN_MODE=failover)
+  - failback-db              # retour east etape 1 : rapatrie la DB west (RUN_MODE=failback)
+  - failback-efs             # retour east etape 2 : rapatrie l'EFS west + redeploie east
 
 variables:
   AWS_DEFAULT_REGION: us-east-1
   AWS_PRIMARY_REGION: us-east-1
   AWS_SECONDARY_REGION: us-west-2
-  RUN_MODE: ""               # "" = deploy / failback ; "failover"
+  RUN_MODE: ""               # "" = deploy ; "failover" ; "failback"
 
 .base:
   image: nikolaik/python-nodejs:python3.13-nodejs20
@@ -44,7 +52,7 @@ variables:
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
       when: never
-    - if: '$RUN_MODE == "failover"'
+    - if: '$RUN_MODE == "failover" || $RUN_MODE == "failback"'
       when: never
     - if: '$CI_COMMIT_BRANCH'
       changes:
@@ -209,7 +217,7 @@ rds-snapshot-dr:
         for S in $OLD; do echo "Suppression ancien snapshot $S ($R)"; aws rds delete-db-snapshot --db-snapshot-identifier "$S" --region $R; done
       done
   rules:
-    - if: '$RUN_MODE == "failover"'
+    - if: '$RUN_MODE == "failover" || $RUN_MODE == "failback"'
       when: never
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
     - when: manual
@@ -245,9 +253,123 @@ failover:
       aws autoscaling start-instance-refresh --auto-scaling-group-name "$ASG" \
         --preferences '{"MinHealthyPercentage":50,"InstanceWarmup":300}' --region $AWS_SECONDARY_REGION
       echo "ASG west rafraichi. Route53 bascule sur us-west-2 des que le health check east echoue."
-      echo "FAILBACK : une fois east repare, re-jouer le deploy (Run pipeline) pour retrouver les 2 sites."
+      echo "FAILBACK : une fois east repare, Run pipeline RUN_MODE=failback (failback-rds puis failback-efs)."
   rules:
     - if: '$RUN_MODE == "failover"'
+      when: manual
+      allow_failure: true
+    - when: never
+
+# ============================================================
+# 6. FAILBACK etape 1 (RUN_MODE=failback) : rapatrie la DB west vers east.
+#    Snapshot de wordpress-rds-secondary (west, contient les ecritures de la panne)
+#    -> copie cross-region east -> restaure wordpress-rds-failback -> repointe le secret east.
+# ============================================================
+failback-rds:
+  image: nikolaik/python-nodejs:python3.13-nodejs20
+  stage: failback-db
+  before_script:
+    - pip install awscli --quiet
+  script:
+    - |
+      TS=$(date +%Y%m%d-%H%M%S); SNAP="wordpress-failback-snap-$TS"
+      echo "Snapshot de wordpress-rds-secondary (west) -> $SNAP"
+      aws rds create-db-snapshot --db-instance-identifier wordpress-rds-secondary --db-snapshot-identifier "$SNAP" --region $AWS_SECONDARY_REGION
+      aws rds wait db-snapshot-available --db-snapshot-identifier "$SNAP" --region $AWS_SECONDARY_REGION
+    - |
+      SRC_ARN="arn:aws:rds:${AWS_SECONDARY_REGION}:${AWS_ACCOUNT_ID}:snapshot:${SNAP}"
+      echo "Copie du snapshot vers $AWS_PRIMARY_REGION..."
+      aws rds copy-db-snapshot --source-db-snapshot-identifier "$SRC_ARN" --target-db-snapshot-identifier "$SNAP" --region $AWS_PRIMARY_REGION
+      aws rds wait db-snapshot-available --db-snapshot-identifier "$SNAP" --region $AWS_PRIMARY_REGION
+    - |
+      SUBNET_GROUP=$(aws rds describe-db-instances --db-instance-identifier wordpress-rds-primary \
+        --region $AWS_PRIMARY_REGION --query "DBInstances[0].DBSubnetGroup.DBSubnetGroupName" --output text)
+      DB_SG=$(aws ec2 describe-security-groups --region $AWS_PRIMARY_REGION \
+        --filters "Name=tag:Name,Values=SG-DB-Prod" --query "SecurityGroups[0].GroupId" --output text)
+      echo "SubnetGroup=$SUBNET_GROUP SG=$DB_SG"
+      if ! aws rds describe-db-instances --db-instance-identifier wordpress-rds-failback --region $AWS_PRIMARY_REGION 2>/dev/null; then
+        aws rds restore-db-instance-from-db-snapshot \
+          --db-instance-identifier wordpress-rds-failback \
+          --db-snapshot-identifier "$SNAP" \
+          --db-instance-class db.t3.micro --no-publicly-accessible \
+          --db-subnet-group-name "$SUBNET_GROUP" \
+          --vpc-security-group-ids "$DB_SG" \
+          --region $AWS_PRIMARY_REGION
+      fi
+      aws rds wait db-instance-available --db-instance-identifier wordpress-rds-failback --region $AWS_PRIMARY_REGION
+    - |
+      NEW_HOST=$(aws rds describe-db-instances --db-instance-identifier wordpress-rds-failback \
+        --region $AWS_PRIMARY_REGION --query "DBInstances[0].Endpoint.Address" --output text)
+      WP_DB_PW="${WP_DB_PASSWORD:-$DB_PASSWORD}"
+      aws secretsmanager put-secret-value --secret-id prod/wordpress/db --region $AWS_PRIMARY_REGION \
+        --secret-string "{\"host\":\"$NEW_HOST\",\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"wordpress\",\"password\":\"$WP_DB_PW\"}"
+      echo "Secret east -> $NEW_HOST (donnees west rapatriees)"
+  rules:
+    - if: '$RUN_MODE == "failback"'
+      when: manual
+      allow_failure: true
+    - when: never
+
+# ============================================================
+# 6bis. FAILBACK etape 2 (RUN_MODE=failback) : rapatrie l'EFS west + redeploie east.
+#    Replication EFS inverse west->east -> redeploie le primary qui MONTE ce replica
+#    (primary_replica_fs_id -> supprime wordpress-rds-primary, 1 seule DB) -> promotion
+#    -> refresh ASG east. Route53 rebascule sur east quand son health check repasse OK.
+# ============================================================
+failback-efs:
+  extends: .base
+  stage: failback-efs
+  script:
+    - |
+      WEST_FS=$(aws efs describe-file-systems --region $AWS_SECONDARY_REGION \
+        --query "FileSystems[?LifeCycleState=='available'].FileSystemId | [0]" --output text)
+      [ -z "$WEST_FS" ] || [ "$WEST_FS" = "None" ] && { echo "Aucun EFS source en $AWS_SECONDARY_REGION"; exit 1; }
+      echo "EFS source west = $WEST_FS"
+    - |
+      EXIST=$(aws efs describe-replication-configurations --region $AWS_SECONDARY_REGION \
+        --query "Replications[?SourceFileSystemId=='$WEST_FS'].Destinations[0].FileSystemId | [0]" --output text 2>/dev/null || echo "")
+      if [ -z "$EXIST" ] || [ "$EXIST" = "None" ]; then
+        echo "Creation replication inverse $WEST_FS -> $AWS_PRIMARY_REGION"
+        aws efs create-replication-configuration --source-file-system-id "$WEST_FS" \
+          --region $AWS_SECONDARY_REGION --destinations Region=$AWS_PRIMARY_REGION
+      fi
+    - |
+      EAST_FS=""
+      for i in $(seq 1 30); do
+        EAST_FS=$(aws efs describe-replication-configurations --region $AWS_SECONDARY_REGION \
+          --query "Replications[?SourceFileSystemId=='$WEST_FS'].Destinations[0].FileSystemId | [0]" --output text 2>/dev/null || echo "")
+        [ -n "$EAST_FS" ] && [ "$EAST_FS" != "None" ] && break
+        echo "  destination pas prete ($i/30), 20s..."; sleep 20
+      done
+      [ -z "$EAST_FS" ] || [ "$EAST_FS" = "None" ] && { echo "Replica east introuvable"; exit 1; }
+      echo "Replica east = $EAST_FS ; attente synchro initiale..."
+      for i in $(seq 1 60); do
+        ST=$(aws efs describe-file-systems --file-system-id "$EAST_FS" --region $AWS_PRIMARY_REGION \
+          --query "FileSystems[0].LifeCycleState" --output text 2>/dev/null || echo "")
+        SYNC=$(aws efs describe-replication-configurations --region $AWS_SECONDARY_REGION \
+          --query "Replications[?SourceFileSystemId=='$WEST_FS'].Destinations[0].LastReplicatedTimestamp | [0]" --output text 2>/dev/null || echo "")
+        echo "  etat=$ST sync=$SYNC"
+        [ "$ST" = "available" ] && [ -n "$SYNC" ] && [ "$SYNC" != "None" ] && break
+        sleep 20
+      done
+      echo "$EAST_FS" > east_fs.txt
+    - |
+      EAST_FS=$(cat east_fs.txt)
+      ALB_DNS_SECONDARY=$(aws elbv2 describe-load-balancers --names wp-alb-secondary \
+        --region $AWS_SECONDARY_REGION --query "LoadBalancers[0].DNSName" --output text)
+      cdk deploy InfraPrimaryStack --require-approval never \
+        -c primary_replica_fs_id="$EAST_FS" -c alb_dns_secondary="$ALB_DNS_SECONDARY"
+    - |
+      aws efs delete-replication-configuration --source-file-system-id "$WEST_FS" --region $AWS_SECONDARY_REGION \
+        && echo "Replica east promu writable" || echo "AVERTISSEMENT: promotion echouee"
+    - |
+      ASG=$(aws autoscaling describe-auto-scaling-groups --region $AWS_PRIMARY_REGION \
+        --query "AutoScalingGroups[?contains(AutoScalingGroupName,'Asg')].AutoScalingGroupName" --output text)
+      aws autoscaling start-instance-refresh --auto-scaling-group-name "$ASG" \
+        --preferences '{"MinHealthyPercentage":50,"InstanceWarmup":300}' --region $AWS_PRIMARY_REGION
+      echo "east sert les donnees rapatriees. Route53 rebascule sur east quand son health check est OK."
+  rules:
+    - if: '$RUN_MODE == "failback"'
       when: manual
       allow_failure: true
     - when: never
