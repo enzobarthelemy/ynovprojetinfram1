@@ -93,8 +93,9 @@ rds-snapshot-dr:
     # 3. Retention : garde les 3 derniers dans chaque region
     - |
       for R in $AWS_PRIMARY_REGION $AWS_SECONDARY_REGION; do
+        # Uniquement les snapshots 'available' (les 'pending' ont SnapshotCreateTime=null -> casse sort_by)
         OLD=$(aws rds describe-db-snapshots --region $R --snapshot-type manual \
-          --query "reverse(sort_by(DBSnapshots[?starts_with(DBSnapshotIdentifier,'wordpress-primary-snap-')], &SnapshotCreateTime))[3:].DBSnapshotIdentifier" \
+          --query "reverse(sort_by(DBSnapshots[?starts_with(DBSnapshotIdentifier,'wordpress-primary-snap-') && Status=='available'], &SnapshotCreateTime))[3:].DBSnapshotIdentifier" \
           --output text)
         for S in $OLD; do echo "Suppression ancien snapshot $S ($R)"; aws rds delete-db-snapshot --db-snapshot-identifier "$S" --region $R; done
       done
