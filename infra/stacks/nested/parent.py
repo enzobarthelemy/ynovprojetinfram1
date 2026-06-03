@@ -55,13 +55,19 @@ class InfraStack(Stack):
         self.sg = SgNested(self, "Sg",
             vpc_id=self.vpc.vpc.vpc_id, name=region_kind)
 
-        # 3. RDS : primary = instance Multi-AZ ; secondary = subnet group seul (cold standby)
+        # 3. RDS :
+        #    primary normal   = instance Multi-AZ (wordpress-rds-primary)
+        #    primary failback = PAS d'instance : la DB active est wordpress-rds-failback
+        #                       (restauree par le job failback-rds, pointee par le secret).
+        #                       CDK supprime alors wordpress-rds-primary -> 1 seule DB en east.
+        #    secondary        = subnet group seul (cold standby)
+        create_db_instance = is_primary and not primary_replica_fs_id
         self.rds = RdsNested(self, "Rds",
             db_subnet_ids=[self.vpc.db_subnet_1.subnet_id, self.vpc.db_subnet_2.subnet_id],
             db_sg_id=self.sg.rds_sg.ref,
             db_password=db_password,
             name=rds_name, multi_az=is_primary,
-            create_instance=is_primary)
+            create_instance=create_db_instance)
 
         # 4. ALB (toujours - le secondary ALB est requis des la pass 1 pour Route53)
         self.alb = AlbNested(self, "Alb",
@@ -98,7 +104,9 @@ class InfraStack(Stack):
                     efs_sg_id=self.sg.efs_sg.ref, name=rds_name,
                     replicate_to_region="us-west-2")
                 efs_id = self.efs.file_system_id
-            rds_host = self.rds.endpoint
+            # Normal : token RDS de wordpress-rds-primary. Failback : pas d'instance CDK,
+            # la DB (wordpress-rds-failback) est resolue via le secret .host de la region.
+            rds_host = self.rds.endpoint or ""
         else:
             create_compute = bool(replica_fs_id)
             if create_compute:

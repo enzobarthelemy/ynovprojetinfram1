@@ -28,8 +28,11 @@ class RdsNested(NestedStack):
                  create_instance: bool = True, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        # Nom fixe uniquement pour le secondary (cold standby, retrouve au failover).
-        fixed_name = None if create_instance else f"wordpress-rds-subnet-{name}"
+        # Nom fixe uniquement pour le SECONDARY (cold standby, retrouve au failover).
+        # Le primary garde TOUJOURS un nom auto-genere (normal ET failback) : sinon
+        # CloudFormation renommerait le subnet group alors que la DB de failback l'utilise
+        # -> DELETE_FAILED. Le job failback-rds retrouve ce subnet group via l'instance.
+        fixed_name = f"wordpress-rds-subnet-{name}" if name == "secondary" else None
         subnet_group = rds.CfnDBSubnetGroup(self, "RdsSubnetGroup",
             db_subnet_group_name=fixed_name,
             db_subnet_group_description=f"Subnet group RDS WordPress {name}",
