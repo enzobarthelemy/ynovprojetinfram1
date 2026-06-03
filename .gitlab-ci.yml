@@ -285,6 +285,13 @@ failover:
         --preferences '{"MinHealthyPercentage":50,"InstanceWarmup":300}' --region $AWS_SECONDARY_REGION
       echo "ASG west rafraichi. Route53 bascule sur us-west-2 des que le health check east echoue."
       echo "FAILBACK : une fois east repare, Run pipeline RUN_MODE=failback (failback-rds puis failback-efs)."
+    # 5. Nettoyage : supprime l'ancienne DB seed (west sert maintenant sur wordpress-rds-failover)
+    #    -> evite 2 instances RDS qui tournent en us-west-2.
+    - |
+      aws rds delete-db-instance --db-instance-identifier wordpress-rds-secondary \
+        --skip-final-snapshot --delete-automated-backups --region $AWS_SECONDARY_REGION 2>/dev/null \
+        && echo "Ancienne DB seed wordpress-rds-secondary supprimee (1 seule DB en west)" \
+        || echo "wordpress-rds-secondary deja absente (rien a nettoyer)"
   rules:
     - if: '$RUN_MODE == "failover"'
       when: manual
