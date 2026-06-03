@@ -69,8 +69,11 @@ secrets:
       WP_ADMIN_PW="${WP_ADMIN_PASSWORD:-$DB_PASSWORD}"
       WP_DB_PW="${WP_DB_PASSWORD:-$DB_PASSWORD}"
       WP_ADMIN_MAIL="${WP_ADMIN_EMAIL:-admin@ynov.com}"
+      # CREATE-ONLY : on cree le secret s'il n'existe pas, mais on NE l'ecrase PAS s'il existe.
+      # -> preserve le .host ajoute par seed-west-db (sinon un re-run de 'secrets' le clobber et
+      #    casse us-west-2 qui n'a pas de token RDS). Pour changer une valeur : supprimer le secret puis relancer.
       cu() { aws secretsmanager create-secret --name "$1" --secret-string "$2" --region "$3" 2>/dev/null \
-             || aws secretsmanager put-secret-value --secret-id "$1" --secret-string "$2" --region "$3" >/dev/null; echo "OK $3 $1"; }
+             && echo "CREE $3 $1" || echo "EXISTE deja $3 $1 (inchange)"; }
       # NB : plus de secret db-admin -> le compte master RDS est genere et stocke par RDS
       # (manage_master_user_password). Le user applicatif 'wordpress' (db) reste gere par nous.
       for R in "$AWS_PRIMARY_REGION" "$AWS_SECONDARY_REGION"; do
