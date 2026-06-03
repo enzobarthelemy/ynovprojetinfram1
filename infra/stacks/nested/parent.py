@@ -65,7 +65,6 @@ class InfraStack(Stack):
         self.rds = RdsNested(self, "Rds",
             db_subnet_ids=[self.vpc.db_subnet_1.subnet_id, self.vpc.db_subnet_2.subnet_id],
             db_sg_id=self.sg.rds_sg.ref,
-            db_password=db_password,
             name=rds_name, multi_az=is_primary,
             create_instance=create_db_instance)
 
@@ -127,7 +126,10 @@ class InfraStack(Stack):
                 rds_host=rds_host,
                 alb_dns=self.alb.alb_dns,
                 site_fqdn=self.WEB_FQDN,
-                name=rds_name)
+                name=rds_name,
+                # east normal : secret master genere par RDS. Secondary / failback : vide
+                # (le user applicatif existe deja dans la DB restauree).
+                master_secret_arn=self.rds.master_secret_arn or "")
 
         # 7. Route53 (primary uniquement, si l'ALB secondaire est connu)
         if is_primary and alb_dns_secondary:

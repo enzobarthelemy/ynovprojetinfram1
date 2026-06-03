@@ -71,8 +71,9 @@ secrets:
       WP_ADMIN_MAIL="${WP_ADMIN_EMAIL:-admin@ynov.com}"
       cu() { aws secretsmanager create-secret --name "$1" --secret-string "$2" --region "$3" 2>/dev/null \
              || aws secretsmanager put-secret-value --secret-id "$1" --secret-string "$2" --region "$3" >/dev/null; echo "OK $3 $1"; }
+      # NB : plus de secret db-admin -> le compte master RDS est genere et stocke par RDS
+      # (manage_master_user_password). Le user applicatif 'wordpress' (db) reste gere par nous.
       for R in "$AWS_PRIMARY_REGION" "$AWS_SECONDARY_REGION"; do
-        cu "prod/wordpress/db-admin" "{\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"admin\",\"password\":\"$DB_PASSWORD\"}" "$R"
         cu "prod/wordpress/db" "{\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"wordpress\",\"password\":\"$WP_DB_PW\"}" "$R"
         cu "prod/wordpress/app" "{\"admin_user\":\"admin\",\"admin_password\":\"$WP_ADMIN_PW\",\"admin_email\":\"$WP_ADMIN_MAIL\"}" "$R"
       done

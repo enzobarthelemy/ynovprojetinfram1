@@ -6,14 +6,16 @@ exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
 # CONFIG — à adapter ou passer via variables CDK/SSM
 # ============================================================
 SECRET_DB="prod/wordpress/db"            # user applicatif WordPress (moindre privilege)
-SECRET_DB_ADMIN="prod/wordpress/db-admin" # compte master (admin) pour creer le user app
 SECRET_WP="prod/wordpress/app"
-# EFS_ID, RDS_HOST, ALB_DNS_NAME, SITE_FQDN exportes en entete par le launch template (tokens CDK)
+# EFS_ID, RDS_HOST, ALB_DNS_NAME, SITE_FQDN, MASTER_SECRET_ARN exportes en entete (tokens CDK)
 EFS_ID="${EFS_ID:?EFS_ID manquant}"
 RDS_HOST="${RDS_HOST:-}"   # vide sur le secondary cold standby (DB via secret au failover)
 ALB_DNS_NAME="${ALB_DNS_NAME:?ALB_DNS_NAME manquant}"
 SITE_FQDN="${SITE_FQDN:-$ALB_DNS_NAME}"   # FQDN Route53 (failover), fallback ALB DNS
 WP_SITE_URL="http://${SITE_FQDN}"
+# Secret master genere par RDS (manage_master_user_password). Sert uniquement a creer le
+# user applicatif sur une DB FRAICHE (east). Vide cote secondary/restore (user deja present).
+MASTER_SECRET_ARN="${MASTER_SECRET_ARN:-}"
 
 AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
 COMPOSE_DIR="/opt/wordpress"
@@ -72,7 +74,6 @@ fetch_secret() {
 }
 
 DB_SECRET=$(fetch_secret "$SECRET_DB")
-DB_ADMIN_SECRET=$(fetch_secret "$SECRET_DB_ADMIN")
 WP_SECRET=$(fetch_secret "$SECRET_WP")
 
 # User applicatif WordPress (moindre privilege)
@@ -85,19 +86,22 @@ DB_NAME=$(echo "$DB_SECRET"     | jq -r '.name')
 DB_USER=$(echo "$DB_SECRET"     | jq -r '.username')
 DB_PASS=$(echo "$DB_SECRET"     | jq -r '.password')
 
-# Compte master (admin) — sert uniquement a creer le user applicatif
-ADMIN_USER=$(echo "$DB_ADMIN_SECRET" | jq -r '.username')
-ADMIN_PASS=$(echo "$DB_ADMIN_SECRET" | jq -r '.password')
-
 WP_ADMIN_USER=$(echo "$WP_SECRET"  | jq -r '.admin_user')
 WP_ADMIN_PASS=$(echo "$WP_SECRET"  | jq -r '.admin_password')
 WP_ADMIN_EMAIL=$(echo "$WP_SECRET" | jq -r '.admin_email')
 
 # ============================================================
-# 3b. Creation du user applicatif WordPress (idempotent)
-#     SKIP si DB_HOST vide (secondary cold standby : pas de DB tant qu'il n'y a pas de failover)
+# 3b. Creation du user applicatif WordPress (idempotent), via le compte master RDS.
+#     Uniquement sur une DB FRAICHE (east) : MASTER_SECRET_ARN fourni.
+#     SKIP si DB_HOST vide (pas de DB) OU MASTER_SECRET_ARN vide (DB restauree : le
+#     user applicatif y est deja present).
 # ============================================================
-if [ -n "$DB_HOST" ]; then
+if [ -n "$DB_HOST" ] && [ -n "$MASTER_SECRET_ARN" ]; then
+  # Compte master genere par RDS (Secrets Manager) — sert uniquement a creer le user app
+  MASTER_SECRET=$(aws secretsmanager get-secret-value --region "$AWS_REGION" --secret-id "$MASTER_SECRET_ARN" --query SecretString --output text)
+  ADMIN_USER=$(echo "$MASTER_SECRET" | jq -r '.username')
+  ADMIN_PASS=$(echo "$MASTER_SECRET" | jq -r '.password')
+
   echo "Attente disponibilite MySQL ($DB_HOST)..."
   for i in $(seq 1 30); do
     if mysqladmin ping -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" --silent 2>/dev/null; then
@@ -117,7 +121,7 @@ FLUSH PRIVILEGES;
 SQL
   echo "User applicatif pret."
 else
-  echo "DB_HOST vide -> COLD STANDBY (pas de DB). Creation user SQL sautee."
+  echo "Pas de creation user SQL (DB_HOST vide ou DB restauree avec user deja present)."
 fi
 
 # ============================================================

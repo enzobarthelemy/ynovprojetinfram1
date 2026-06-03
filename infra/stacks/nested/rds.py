@@ -24,7 +24,7 @@ class RdsNested(NestedStack):
 
     def __init__(self, scope: Construct, construct_id: str, *,
                  db_subnet_ids: list, db_sg_id: str, name: str,
-                 db_password: str | None = None, multi_az: bool = False,
+                 multi_az: bool = False,
                  create_instance: bool = True, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
@@ -41,6 +41,7 @@ class RdsNested(NestedStack):
         )
         self.subnet_group_name = fixed_name or subnet_group.ref
         self.endpoint = None
+        self.master_secret_arn = None   # ARN du secret master genere par RDS (si instance)
 
         # Instance creee uniquement en primary (le secondary est cold standby)
         if create_instance:
@@ -53,7 +54,9 @@ class RdsNested(NestedStack):
                 allocated_storage="20",
                 storage_type="gp2",
                 master_username="admin",
-                master_user_password=db_password,
+                # RDS genere le mot de passe master et le stocke dans un secret Secrets
+                # Manager manage (rien en clair dans le template CloudFormation).
+                manage_master_user_password=True,
                 db_subnet_group_name=subnet_group.ref,
                 vpc_security_groups=[db_sg_id],
                 multi_az=multi_az,
@@ -64,5 +67,6 @@ class RdsNested(NestedStack):
                 tags=[{"key": "Name", "value": f"wordpress-rds-{name}"}],
             )
             self.endpoint = self.db.attr_endpoint_address
+            self.master_secret_arn = self.db.attr_master_user_secret_secret_arn
 
         CfnOutput(self, "DbSubnetGroupName", value=self.subnet_group_name)
