@@ -6,14 +6,16 @@ exec > >(tee /var/log/user-data.log | logger -t user-data) 2>&1
 # CONFIG — à adapter ou passer via variables CDK/SSM
 # ============================================================
 SECRET_DB="prod/wordpress/db"            # user applicatif WordPress (moindre privilege)
-SECRET_DB_ADMIN="prod/wordpress/db-admin" # compte master (admin) pour creer le user app
 SECRET_WP="prod/wordpress/app"
-# EFS_ID, RDS_HOST, ALB_DNS_NAME, SITE_FQDN exportes en entete par le launch template (tokens CDK)
+# EFS_ID, RDS_HOST, ALB_DNS_NAME, SITE_FQDN, MASTER_SECRET_ARN exportes en entete (tokens CDK)
 EFS_ID="${EFS_ID:?EFS_ID manquant}"
-RDS_HOST="${RDS_HOST:?RDS_HOST manquant}"
+RDS_HOST="${RDS_HOST:-}"   # vide sur le secondary cold standby (DB via secret au failover)
 ALB_DNS_NAME="${ALB_DNS_NAME:?ALB_DNS_NAME manquant}"
 SITE_FQDN="${SITE_FQDN:-$ALB_DNS_NAME}"   # FQDN Route53 (failover), fallback ALB DNS
 WP_SITE_URL="http://${SITE_FQDN}"
+# Secret master genere par RDS (manage_master_user_password). Sert uniquement a creer le
+# user applicatif sur une DB FRAICHE (east). Vide cote secondary/restore (user deja present).
+MASTER_SECRET_ARN="${MASTER_SECRET_ARN:-}"
 
 AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
 COMPOSE_DIR="/opt/wordpress"
@@ -48,13 +50,16 @@ fi
 
 # Droits www-data (UID 33) — uniquement si l'EFS est accessible en ecriture
 # (un EFS cible de replication serait read-only : on saute le chown dans ce cas)
+# EFS_WRITABLE : 1 si on possede l'EFS (site source/promu), 0 si replica read-only (standby)
 if touch "$EFS_MOUNT/.mount_test" 2>/dev/null; then
   rm -f "$EFS_MOUNT/.mount_test"
+  EFS_WRITABLE=1
   echo "EFS en Lecture-Ecriture : application des droits 33:33"
   chown -R 33:33 "$EFS_MOUNT"
   chmod 755 "$EFS_MOUNT"
 else
-  echo "EFS en Lecture seule : chown saute"
+  EFS_WRITABLE=0
+  echo "EFS en Lecture seule (replica standby) : chown + install WP sautes (WordPress deja replique)"
 fi
 
 # ============================================================
@@ -69,47 +74,55 @@ fetch_secret() {
 }
 
 DB_SECRET=$(fetch_secret "$SECRET_DB")
-DB_ADMIN_SECRET=$(fetch_secret "$SECRET_DB_ADMIN")
 WP_SECRET=$(fetch_secret "$SECRET_WP")
 
 # User applicatif WordPress (moindre privilege)
-# DB_HOST vient du token RDS injecte (pas du secret) => secrets decouples du RDS
-DB_HOST="$RDS_HOST"
+# DB_HOST : priorite au secret (.host) si renseigne (cas FAILOVER : on repointe vers
+# le RDS restaure), sinon fallback sur le token RDS injecte (fonctionnement normal).
+DB_HOST=$(echo "$DB_SECRET" | jq -r '.host // empty')
+[ -z "$DB_HOST" ] && DB_HOST="$RDS_HOST"
 DB_PORT=$(echo "$DB_SECRET"     | jq -r '.port')
 DB_NAME=$(echo "$DB_SECRET"     | jq -r '.name')
 DB_USER=$(echo "$DB_SECRET"     | jq -r '.username')
 DB_PASS=$(echo "$DB_SECRET"     | jq -r '.password')
-
-# Compte master (admin) — sert uniquement a creer le user applicatif
-ADMIN_USER=$(echo "$DB_ADMIN_SECRET" | jq -r '.username')
-ADMIN_PASS=$(echo "$DB_ADMIN_SECRET" | jq -r '.password')
 
 WP_ADMIN_USER=$(echo "$WP_SECRET"  | jq -r '.admin_user')
 WP_ADMIN_PASS=$(echo "$WP_SECRET"  | jq -r '.admin_password')
 WP_ADMIN_EMAIL=$(echo "$WP_SECRET" | jq -r '.admin_email')
 
 # ============================================================
-# 3b. Creation du user applicatif WordPress (idempotent)
-#     Execute avec les creds ADMIN. Le user app n'a de droits que sur la base wordpress.
+# 3b. Creation du user applicatif WordPress (idempotent), via le compte master RDS.
+#     Uniquement sur une DB FRAICHE (east) : MASTER_SECRET_ARN fourni.
+#     SKIP si DB_HOST vide (pas de DB) OU MASTER_SECRET_ARN vide (DB restauree : le
+#     user applicatif y est deja present).
 # ============================================================
-echo "Attente disponibilite MySQL..."
-for i in $(seq 1 30); do
-  if mysqladmin ping -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" --silent 2>/dev/null; then
-    echo "MySQL repond."
-    break
-  fi
-  echo "  pas encore pret (tentative $i/30), attente 10s..."
-  sleep 10
-done
+if [ -n "$DB_HOST" ] && [ -n "$MASTER_SECRET_ARN" ]; then
+  # Compte master genere par RDS (Secrets Manager) — sert uniquement a creer le user app
+  MASTER_SECRET=$(aws secretsmanager get-secret-value --region "$AWS_REGION" --secret-id "$MASTER_SECRET_ARN" --query SecretString --output text)
+  ADMIN_USER=$(echo "$MASTER_SECRET" | jq -r '.username')
+  ADMIN_PASS=$(echo "$MASTER_SECRET" | jq -r '.password')
 
-echo "Creation du user applicatif '$DB_USER'..."
-mysql -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" <<SQL
+  echo "Attente disponibilite MySQL ($DB_HOST)..."
+  for i in $(seq 1 30); do
+    if mysqladmin ping -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" --silent 2>/dev/null; then
+      echo "MySQL repond."
+      break
+    fi
+    echo "  pas encore pret (tentative $i/30), attente 10s..."
+    sleep 10
+  done
+
+  echo "Creation du user applicatif '$DB_USER'..."
+  mysql -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" <<SQL || echo "AVERTISSEMENT: creation user echouee (DB peut-etre non prete)"
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;
 CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';
 FLUSH PRIVILEGES;
 SQL
-echo "User applicatif pret."
+  echo "User applicatif pret."
+else
+  echo "Pas de creation user SQL (DB_HOST vide ou DB restauree avec user deja present)."
+fi
 
 # ============================================================
 # 4. docker-compose.yml
@@ -164,33 +177,39 @@ docker compose up -d
 
 # ============================================================
 # 6. WP-CLI : installation WordPress + WooCommerce (idempotent)
-#    Skippé sur la région secondaire (EFS en lecture seule)
+#    SKIP si pas de DB OU si EFS read-only (standby) : sur le replica, WordPress est
+#    deja installe (repliquE depuis east) et l'EFS n'est pas inscriptible -> on sert juste.
 # ============================================================
-WP_CLI="docker compose -f $COMPOSE_DIR/docker-compose.yml run --rm wp-cli wp"
+if [ -n "$DB_HOST" ] && [ "$EFS_WRITABLE" = "1" ]; then
+  WP_CLI="docker compose -f $COMPOSE_DIR/docker-compose.yml run --rm wp-cli wp"
 
-echo "Attente démarrage WordPress..."
-until docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T wordpress curl -sf http://localhost > /dev/null 2>&1; do
-  sleep 5
-done
+  echo "Attente démarrage WordPress..."
+  for i in $(seq 1 30); do
+    docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T wordpress curl -sf http://localhost > /dev/null 2>&1 && break
+    sleep 5
+  done
 
-if ! $WP_CLI core is-installed 2>/dev/null; then
-  echo "Installation WordPress..."
-  $WP_CLI core install \
-    --url="$WP_SITE_URL" \
-    --title="My Store" \
-    --admin_user="$WP_ADMIN_USER" \
-    --admin_password="$WP_ADMIN_PASS" \
-    --admin_email="$WP_ADMIN_EMAIL" \
-    --skip-email
-fi
+  if ! $WP_CLI core is-installed 2>/dev/null; then
+    echo "Installation WordPress..."
+    $WP_CLI core install \
+      --url="$WP_SITE_URL" \
+      --title="My Store" \
+      --admin_user="$WP_ADMIN_USER" \
+      --admin_password="$WP_ADMIN_PASS" \
+      --admin_email="$WP_ADMIN_EMAIL" \
+      --skip-email || echo "AVERTISSEMENT: install WP echouee"
+  fi
 
-if ! $WP_CLI plugin is-installed woocommerce 2>/dev/null; then
-  echo "Installation WooCommerce..."
-  $WP_CLI plugin install woocommerce --activate
+  if ! $WP_CLI plugin is-installed woocommerce 2>/dev/null; then
+    echo "Installation WooCommerce..."
+    $WP_CLI plugin install woocommerce --activate || echo "AVERTISSEMENT: install WooCommerce echouee"
+  else
+    $WP_CLI plugin activate woocommerce || true
+  fi
+
+  $WP_CLI rewrite flush || true
 else
-  $WP_CLI plugin activate woocommerce
+  echo "Install WP/WooCommerce sautee (pas de DB, ou EFS replica read-only en standby)."
 fi
-
-$WP_CLI rewrite flush
 
 echo "===> User data terminé avec succès."

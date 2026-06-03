@@ -99,7 +99,6 @@ Composition du groupe :
 
 ** Paul :
 - Correction vpc_stack.py : Création NAT GATEWAY, association sur les tables de routage PrivateWeb
-- Clone infrastructure sur autre instance AWS
 - Mise à jour du schéma d'architecture
 - Recherches stratégie de bascule/gestion des instances Backup
 
@@ -116,15 +115,98 @@ Composition du groupe :
 - Merge correction sg_stack.py et vpc_stack.py + test OK
 - Modification rds_stack.py : configuration nom bdd
 - Reconfig CDK : rassemblement des CloudFormation sur un seul stack + test déploiement global OK
-- Merge des configs réalisées + test global : revoir config route53.py (mauvaise config DNS A), revoir config user_data.sh (mauvaise config URL Wordpress), revoir config EFS répliqué Read-Only sur 2e région
+- Merge des configs réalisées + test global : revoir config route53.py ?, revoir config user_data.sh (mauvaise config URL Wordpress), revoir config EFS répliqué Read-Only sur 2e région
+- Révision user_data.sh : rectification URL Wordpress
 
 
 *** ACTIONS POUR DEMAIN : 
 	- Revoir efs.py : réappliquer la config de réplication Read-Only sur la 2e région (Wordpress n'a pas besoin d'écrire pour la 2e région car pas de traffic dessus sauf si incident)
+	- Revoir route53.py : test à approfondir, création d'une stratégie de trafic ?
 	- Revoir HealthCheck Route 53 ?
 	- Point plan d'architecture v2
 	- Etude des configs IAM qu'on aurait du faire dans un contexte de PROD		
 
 
 ---------------------------------------------------------------------------------------------------------
-### Jour 4 : 03/06/2026 - Objectif : correction des erreurs d'hier & test de l'infrastructure complète
+### Jour 4 : 03/06/2026 - Objectif : révision de l'infrastructure, affinage des configs & des redondances, documentations
+
+** Travail en commun :
+- Review plan d'architecture v2
+- Définition de la stratégie de bascule :
+	- V1 de l'infra (ce projet) : us-east-1 en Primary + toutes les instances activées, us-west-2 en Secondary + toutes les instances activées.
+								  Stratégie de Warm/Warm. On privilégie la disponibilité et la résilience des données au détriment des coûts à cause des contraintes rencontrées par AWS Academy (voir Contraintes.md).
+	- V2 de l'infra (contexte PROD) : us-east-1 en Primary + toutes les instances activées, us-west-2 en Secondary + instances partiellement activées (uniquement la moitié).
+									  Stratégie de Warm/Standby où la région secondaire n'exécute que le strict minimum pour reprendre rapidement la charge sans consommer excessivement le 
+									  temps de se mettre à niveau par rapport au Primary.
+
+** Paul :
+- Clone infrastructure sur autre instance AWS
+- Création RB-AWS-005 : Procédure de Failback
+- MAJ plan d'architecture et schéma de flux
+
+** Enzo :
+- Création RB-AWS-003 : Maintenance Docker
+- Création PW-AWS-001 : Déploiement en boucle EC2
+- Recherches réplication & failover RDS -> bridé à cause d'AWS Academy
+- Recherches failover S3 -> stratégie de trafic Route 53 possible. Pas de failback automatique
+- Création et alimentation du fichier Contraintes.md
+- Rédaction des ADR004, ADR005, ADR006
+- Recherches IAM -> création et alimentation du fichier IAM.md
+- Analyse de sécurité -> action critique requise sur rds.py (mdp en clair une fois généré)
+- Début rédaction README.md
+
+** Thomas :
+- Correction efs.py : config réplication Read-Only sur 2e région
+- Recherches réplication & failover RDS -> bridé à cause d'AWS Academy
+- Correction rds.py : mise en place d'une réplication "backup sur Primary + restauration sur Secondary" en manuel via GitLab
+- Création RB-AWS-004 : CI/CD
+- Rédaction ADR007
+- MAJ des pipelines CI/CD : meilleure répartition par usage (1 pour Déploiement Infra, 1 Failover, 1 Failback)
+- Recherches failover EFS -> Pas de failback automatique
+- Mise en place failback EFS et RDS -> opérationnel
+- Correction de sécurité rds.py (mdp en clair) -> génération du mdp via Secrets Manager et non plus par variable GitLab
+- Merge des configs réalisées + déploiement global infra -> déploiement global OK mais pb de connexion à la base (secret Host vide), résolu à retester
+
+
+*** ACTIONS POUR DEMAIN : 
+	- Test global de l'infra
+	- Test de failover : coupure volontaire EC2 PRIMARY et vérification de bascule sur SECONDARY
+	- Test de surcharge EC2 : vérification déploiement de nouvelles instances
+	- Test de destruction EC2 : résiliation volontaire d'une instance EC2 et vérification déploiement d'une nouvelle instance
+	- Poursuite des documentations (README.md et autres)
+
+
+---------------------------------------------------------------------------------------------------------
+### Jour 5 : 04/06/2026 - Objectif : 
+
+** Travail en commun :
+
+
+** Paul :
+
+
+** Enzo :
+
+
+** Thomas :
+
+
+
+*** ACTIONS POUR DEMAIN : 
+
+
+
+---------------------------------------------------------------------------------------------------------
+### Jour 6 : 05/06/2026 - Objectif : finalisation projet & présentation
+
+** Travail en commun :
+
+
+** Paul :
+
+
+** Enzo :
+
+
+** Thomas :
+
