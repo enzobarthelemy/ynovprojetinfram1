@@ -73,8 +73,10 @@ DB_ADMIN_SECRET=$(fetch_secret "$SECRET_DB_ADMIN")
 WP_SECRET=$(fetch_secret "$SECRET_WP")
 
 # User applicatif WordPress (moindre privilege)
-# DB_HOST vient du token RDS injecte (pas du secret) => secrets decouples du RDS
-DB_HOST="$RDS_HOST"
+# DB_HOST : priorite au secret (.host) si renseigne (cas FAILOVER : on repointe vers
+# le RDS restaure), sinon fallback sur le token RDS injecte (fonctionnement normal).
+DB_HOST=$(echo "$DB_SECRET" | jq -r '.host // empty')
+[ -z "$DB_HOST" ] && DB_HOST="$RDS_HOST"
 DB_PORT=$(echo "$DB_SECRET"     | jq -r '.port')
 DB_NAME=$(echo "$DB_SECRET"     | jq -r '.name')
 DB_USER=$(echo "$DB_SECRET"     | jq -r '.username')

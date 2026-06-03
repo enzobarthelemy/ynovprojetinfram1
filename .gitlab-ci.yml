@@ -3,6 +3,7 @@ stages:
   - deploy-secondary  # InfraSecondaryStack (us-west-2) : cree le bucket S3 cible CRR
   - deploy-primary    # InfraPrimaryStack (us-east-1) : tout + S3 CRR vers secondary
   - dr                # DR : snapshot RDS cross-region (planifie horaire / manuel)
+  - failover          # Bascule DB vers us-west-2 (manuel, 1 clic)
 
 variables:
   AWS_DEFAULT_REGION: us-east-1
@@ -36,6 +37,8 @@ secrets:
         cu "prod/wordpress/app" "{\"admin_user\":\"admin\",\"admin_password\":\"$WP_ADMIN_PW\",\"admin_email\":\"$WP_ADMIN_MAIL\"}" "$R"
       done
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never        # un run planifie ne redeploie PAS l'infra (seul rds-snapshot-dr tourne)
     - if: '$CI_COMMIT_BRANCH'
       changes:
         - infra/**/*
@@ -49,6 +52,8 @@ deploy-secondary:
   script:
     - cdk deploy InfraSecondaryStack --require-approval never
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never        # un run planifie ne redeploie PAS l'infra (seul rds-snapshot-dr tourne)
     - if: '$CI_COMMIT_BRANCH'
       changes:
         - infra/**/*
@@ -65,6 +70,8 @@ deploy-primary:
     - echo "ALB secondaire = $ALB_DNS_SECONDARY"
     - cdk deploy InfraPrimaryStack --require-approval never -c alb_dns_secondary="$ALB_DNS_SECONDARY"
   rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never        # un run planifie ne redeploie PAS l'infra (seul rds-snapshot-dr tourne)
     - if: '$CI_COMMIT_BRANCH'
       changes:
         - infra/**/*
@@ -101,5 +108,62 @@ rds-snapshot-dr:
       done
   rules:
     - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - when: manual
+      allow_failure: true
+
+# ============================================================
+# 5. FAILOVER DB (manuel, 1 clic) : us-east-1 KO -> bascule WordPress secondary
+#    sur une instance RDS restauree depuis le dernier snapshot en us-west-2.
+#    Restaure -> repointe le secret -> rafraichit l'ASG secondary.
+# ============================================================
+failover-rds:
+  image: nikolaik/python-nodejs:python3.13-nodejs20
+  stage: failover
+  before_script:
+    - pip install awscli --quiet
+  script:
+    # 1. Dernier snapshot disponible en us-west-2
+    - |
+      LATEST=$(aws rds describe-db-snapshots --region $AWS_SECONDARY_REGION --snapshot-type manual \
+        --query "reverse(sort_by(DBSnapshots[?starts_with(DBSnapshotIdentifier,'wordpress-primary-snap-') && Status=='available'], &SnapshotCreateTime))[0].DBSnapshotIdentifier" \
+        --output text)
+      [ -z "$LATEST" ] || [ "$LATEST" = "None" ] && { echo "Aucun snapshot disponible en $AWS_SECONDARY_REGION"; exit 1; }
+      echo "Snapshot a restaurer : $LATEST"
+    # 2. Recupere subnet group + SG DB du secondary (crees par InfraSecondaryStack)
+    - |
+      SUBNET_GROUP=$(aws rds describe-db-instances --db-instance-identifier wordpress-rds-secondary --region $AWS_SECONDARY_REGION --query "DBInstances[0].DBSubnetGroup.DBSubnetGroupName" --output text)
+      DB_SG=$(aws rds describe-db-instances --db-instance-identifier wordpress-rds-secondary --region $AWS_SECONDARY_REGION --query "DBInstances[0].VpcSecurityGroups[0].VpcSecurityGroupId" --output text)
+      echo "SubnetGroup=$SUBNET_GROUP SG=$DB_SG"
+    # 3. Restaure le snapshot en nouvelle instance (si pas deja fait)
+    - |
+      if ! aws rds describe-db-instances --db-instance-identifier wordpress-rds-failover --region $AWS_SECONDARY_REGION 2>/dev/null; then
+        aws rds restore-db-instance-from-db-snapshot \
+          --db-instance-identifier wordpress-rds-failover \
+          --db-snapshot-identifier "$LATEST" \
+          --db-instance-class db.t3.micro --no-multi-az --no-publicly-accessible \
+          --db-subnet-group-name "$SUBNET_GROUP" \
+          --vpc-security-group-ids "$DB_SG" \
+          --region $AWS_SECONDARY_REGION
+      fi
+      echo "Attente disponibilite de l'instance restauree..."
+      aws rds wait db-instance-available --db-instance-identifier wordpress-rds-failover --region $AWS_SECONDARY_REGION
+    # 4. Recupere l'endpoint restaure
+    - |
+      NEW_HOST=$(aws rds describe-db-instances --db-instance-identifier wordpress-rds-failover --region $AWS_SECONDARY_REGION --query "DBInstances[0].Endpoint.Address" --output text)
+      echo "Nouvel endpoint DB : $NEW_HOST"
+    # 5. Repointe le secret WordPress secondary (host = instance restauree, user app wordpress)
+    - |
+      WP_DB_PW="${WP_DB_PASSWORD:-$DB_PASSWORD}"
+      aws secretsmanager put-secret-value --secret-id prod/wordpress/db --region $AWS_SECONDARY_REGION \
+        --secret-string "{\"host\":\"$NEW_HOST\",\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"wordpress\",\"password\":\"$WP_DB_PW\"}"
+      echo "Secret repointe vers $NEW_HOST"
+    # 6. Rafraichit l'ASG secondary -> les instances rebootent et lisent le nouveau host
+    - |
+      ASG=$(aws autoscaling describe-auto-scaling-groups --region $AWS_SECONDARY_REGION \
+        --query "AutoScalingGroups[?contains(AutoScalingGroupName,'Asg')].AutoScalingGroupName" --output text)
+      aws autoscaling start-instance-refresh --auto-scaling-group-name "$ASG" \
+        --preferences '{"MinHealthyPercentage":50,"InstanceWarmup":300}' --region $AWS_SECONDARY_REGION
+      echo "Instance refresh lance sur $ASG - le secondary va servir avec la DB restauree"
+  rules:
     - when: manual
       allow_failure: true
