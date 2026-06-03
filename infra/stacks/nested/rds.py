@@ -11,8 +11,15 @@ class RdsNested(NestedStack):
         True  (primary)   -> cree le subnet group + l'instance RDS.
         False (secondary) -> cree UNIQUEMENT le subnet group (cold standby).
                              L'instance arrive au failover (restore du snapshot).
-    Le subnet group a un nom fixe (wordpress-rds-subnet-<name>) pour que le job
-    failover puisse le referencer lors de la restauration.
+
+    Nom du subnet group :
+        secondary -> nom FIXE (wordpress-rds-subnet-secondary) pour que le job
+                     failover puisse le referencer lors de la restauration.
+        primary   -> nom AUTO-genere. Lui imposer un nom forcerait le remplacement
+                     du subnet group, donc de l'instance RDS (DBSubnetGroupName =
+                     update requires replacement) -> bloque par le nom custom de
+                     l'instance + perte de donnees. On laisse donc CloudFormation
+                     gerer le nom.
     """
 
     def __init__(self, scope: Construct, construct_id: str, *,
@@ -21,14 +28,15 @@ class RdsNested(NestedStack):
                  create_instance: bool = True, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
-        subnet_group_name = f"wordpress-rds-subnet-{name}"
+        # Nom fixe uniquement pour le secondary (cold standby, retrouve au failover).
+        fixed_name = None if create_instance else f"wordpress-rds-subnet-{name}"
         subnet_group = rds.CfnDBSubnetGroup(self, "RdsSubnetGroup",
-            db_subnet_group_name=subnet_group_name,
+            db_subnet_group_name=fixed_name,
             db_subnet_group_description=f"Subnet group RDS WordPress {name}",
             subnet_ids=db_subnet_ids,
-            tags=[{"key": "Name", "value": subnet_group_name}],
+            tags=[{"key": "Name", "value": f"wordpress-rds-subnet-{name}"}],
         )
-        self.subnet_group_name = subnet_group_name
+        self.subnet_group_name = fixed_name or subnet_group.ref
         self.endpoint = None
 
         # Instance creee uniquement en primary (le secondary est cold standby)
@@ -54,4 +62,4 @@ class RdsNested(NestedStack):
             )
             self.endpoint = self.db.attr_endpoint_address
 
-        CfnOutput(self, "DbSubnetGroupName", value=subnet_group_name)
+        CfnOutput(self, "DbSubnetGroupName", value=self.subnet_group_name)
