@@ -23,9 +23,15 @@ class InfraStack(Stack):
         Pass 2 (replica_fs_id fourni) : ajoute EFS (montage du replica) + ASG.
         -> le replica EFS et la DB (restauree) ne servent qu'au failover.
 
+    FAILBACK (primary_replica_fs_id fourni au primary) :
+        Le primary monte le FS replique en sens INVERSE (us-west-2 -> us-east-1)
+        au lieu de creer son propre EFS. Permet de rapatrier les donnees ecrites
+        pendant le failover, sans SSM (que des API AWS + CDK).
+
     Contexte fourni au deploy (pas de ref cross-region CDK) :
-        alb_dns_secondary : DNS ALB secondaire (pour Route53 failover sur le primary)
-        replica_fs_id     : ID du FS EFS replique (pour l'EFS du secondary, pass 2)
+        alb_dns_secondary     : DNS ALB secondaire (pour Route53 failover sur le primary)
+        replica_fs_id         : ID du FS EFS replique (pour l'EFS du secondary, pass 2)
+        primary_replica_fs_id : ID du FS EFS replique INVERSE (pour le primary au failback)
     """
 
     WEB_FQDN = "sub.ynov-infram1-grp1.com"
@@ -35,7 +41,8 @@ class InfraStack(Stack):
                  region_kind: str, cidr_prefix: str, azs: list,
                  db_password: str, is_primary: bool, account_id: str,
                  alb_dns_secondary: str | None = None,
-                 replica_fs_id: str | None = None, **kwargs) -> None:
+                 replica_fs_id: str | None = None,
+                 primary_replica_fs_id: str | None = None, **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         rds_name = "primary" if is_primary else "secondary"
@@ -69,28 +76,43 @@ class InfraStack(Stack):
             self.s3 = S3SecondaryNested(self, "S3", account_id=account_id)
 
         # 6. EFS + ASG
-        #    primary   : EFS avec replication + ASG (toujours)
-        #    secondary : seulement en pass 2 (replica_fs_id fourni) -> monte le replica
-        create_compute = is_primary or bool(replica_fs_id)
-        if create_compute:
-            if is_primary:
+        #    primary normal   : cree l'EFS (replication read-only vers us-west-2) + ASG
+        #    primary failback : monte le replica INVERSE (primary_replica_fs_id) + ASG
+        #    secondary pass 1 : pas de compute (cold standby)
+        #    secondary pass 2 : monte le replica (replica_fs_id) + ASG
+        web_subnet_ids = [self.vpc.web_subnet_1.subnet_id, self.vpc.web_subnet_2.subnet_id]
+        if is_primary:
+            create_compute = True
+            if primary_replica_fs_id:
+                # FAILBACK : monte le FS replique en sens inverse (us-west-2 -> us-east-1).
+                # Read-only jusqu'a la promotion, puis writable (comme le secondary au failover).
                 self.efs = EfsNested(self, "Efs",
-                    web_subnet_ids=[self.vpc.web_subnet_1.subnet_id, self.vpc.web_subnet_2.subnet_id],
+                    web_subnet_ids=web_subnet_ids,
+                    efs_sg_id=self.sg.efs_sg.ref, name=rds_name,
+                    replica_fs_id=primary_replica_fs_id)
+                efs_id = primary_replica_fs_id
+            else:
+                # Normal : cree l'EFS avec replication read-only vers us-west-2
+                self.efs = EfsNested(self, "Efs",
+                    web_subnet_ids=web_subnet_ids,
                     efs_sg_id=self.sg.efs_sg.ref, name=rds_name,
                     replicate_to_region="us-west-2")
                 efs_id = self.efs.file_system_id
-                rds_host = self.rds.endpoint
-            else:
+            rds_host = self.rds.endpoint
+        else:
+            create_compute = bool(replica_fs_id)
+            if create_compute:
                 # Secondary : monte le FS replique (read-only ; promu au failover)
                 self.efs = EfsNested(self, "Efs",
-                    web_subnet_ids=[self.vpc.web_subnet_1.subnet_id, self.vpc.web_subnet_2.subnet_id],
+                    web_subnet_ids=web_subnet_ids,
                     efs_sg_id=self.sg.efs_sg.ref, name=rds_name,
                     replica_fs_id=replica_fs_id)
                 efs_id = replica_fs_id
                 rds_host = ""   # DB via secret au failover
 
+        if create_compute:
             self.asg = AsgNested(self, "Asg",
-                web_subnet_ids=[self.vpc.web_subnet_1.subnet_id, self.vpc.web_subnet_2.subnet_id],
+                web_subnet_ids=web_subnet_ids,
                 asg_sg_id=self.sg.asg_sg.ref,
                 target_group_arn=self.alb.target_group_arn,
                 efs_id=efs_id,

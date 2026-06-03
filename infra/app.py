@@ -22,6 +22,10 @@ alb_dns_secondary = app.node.try_get_context("alb_dns_secondary")
 # -c replica_fs_id=... apres le deploy du primary. Sans lui, le secondary ne cree
 # pas l'EFS/ASG (pass 1).
 replica_fs_id = app.node.try_get_context("replica_fs_id")
+# ID du FS EFS replique en sens INVERSE (us-west-2 -> us-east-1), fourni au deploy
+# du primary lors du FAILBACK via -c primary_replica_fs_id=... Le primary monte alors
+# ce replica au lieu de creer son propre EFS (rapatriement des donnees du failover).
+primary_replica_fs_id = app.node.try_get_context("primary_replica_fs_id")
 
 # CliCredentialsStackSynthesizer : utilise les creds du CI (pas de bootstrap)
 # + bucket d'assets pour les templates des nested stacks.
@@ -36,6 +40,7 @@ InfraStack(app, "InfraPrimaryStack",
     is_primary=True,
     account_id=account_id,
     alb_dns_secondary=alb_dns_secondary,
+    primary_replica_fs_id=primary_replica_fs_id,
     env=cdk.Environment(account=account_id, region="us-east-1"),
     synthesizer=make_synth(f"ynov-cdk-assets-{account_id}-use1"),
 )

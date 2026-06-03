@@ -5,6 +5,7 @@ stages:
   - deploy-secondary-compute # Pass 2 : EFS (monte le replica) + ASG sur le secondary
   - dr                       # DR : snapshot RDS cross-region (planifie horaire / manuel)
   - failover                 # Bascule complete vers us-west-2 (manuel, 1 clic)
+  - failback                 # Retour vers us-east-1 avec rapatriement des donnees (manuel)
 
 variables:
   AWS_DEFAULT_REGION: us-east-1
@@ -208,6 +209,148 @@ failover-rds:
       aws autoscaling start-instance-refresh --auto-scaling-group-name "$ASG" \
         --preferences '{"MinHealthyPercentage":50,"InstanceWarmup":300}' --region $AWS_SECONDARY_REGION
       echo "Instance refresh lance sur $ASG - le secondary va servir avec la DB restauree"
+  rules:
+    - when: manual
+      allow_failure: true
+
+# ============================================================
+# 6. FAILBACK DB (manuel) : retour vers us-east-1.
+#    Symetrique du failover, en sens inverse : snapshot de la DB de failover
+#    (us-west-2) -> copie cross-region vers us-east-1 -> restaure une nouvelle
+#    instance wordpress-rds-failback -> repointe le secret east.
+#    Prerequis : us-east-1 repare ; ecritures gelees sur le site west (cohérence).
+# ============================================================
+failback-rds:
+  image: nikolaik/python-nodejs:python3.13-nodejs20
+  stage: failback
+  before_script:
+    - pip install awscli --quiet
+  script:
+    # 1. Snapshot de la DB de failover (us-west-2)
+    - |
+      TS=$(date +%Y%m%d-%H%M%S)
+      SNAP="wordpress-failback-snap-$TS"
+      echo "Snapshot de wordpress-rds-failover -> $SNAP"
+      aws rds create-db-snapshot --db-instance-identifier wordpress-rds-failover \
+        --db-snapshot-identifier "$SNAP" --region $AWS_SECONDARY_REGION
+      aws rds wait db-snapshot-available --db-snapshot-identifier "$SNAP" --region $AWS_SECONDARY_REGION
+    # 2. Copie cross-region vers us-east-1
+    - |
+      SRC_ARN="arn:aws:rds:${AWS_SECONDARY_REGION}:${AWS_ACCOUNT_ID}:snapshot:${SNAP}"
+      echo "Copie du snapshot vers $AWS_PRIMARY_REGION..."
+      aws rds copy-db-snapshot --source-db-snapshot-identifier "$SRC_ARN" \
+        --target-db-snapshot-identifier "$SNAP" --region $AWS_PRIMARY_REGION
+      aws rds wait db-snapshot-available --db-snapshot-identifier "$SNAP" --region $AWS_PRIMARY_REGION
+    # 3. Subnet group du primary (nom auto -> recupere via l'instance) + SG DB primary (par tag)
+    - |
+      SUBNET_GROUP=$(aws rds describe-db-instances --db-instance-identifier wordpress-rds-primary \
+        --region $AWS_PRIMARY_REGION --query "DBInstances[0].DBSubnetGroup.DBSubnetGroupName" --output text)
+      DB_SG=$(aws ec2 describe-security-groups --region $AWS_PRIMARY_REGION \
+        --filters "Name=tag:Name,Values=SG-DB-Prod" --query "SecurityGroups[0].GroupId" --output text)
+      echo "SubnetGroup=$SUBNET_GROUP SG=$DB_SG"
+    # 4. Restaure une nouvelle instance en us-east-1 (si pas deja faite)
+    - |
+      if ! aws rds describe-db-instances --db-instance-identifier wordpress-rds-failback --region $AWS_PRIMARY_REGION 2>/dev/null; then
+        aws rds restore-db-instance-from-db-snapshot \
+          --db-instance-identifier wordpress-rds-failback \
+          --db-snapshot-identifier "$SNAP" \
+          --db-instance-class db.t3.micro --no-publicly-accessible \
+          --db-subnet-group-name "$SUBNET_GROUP" \
+          --vpc-security-group-ids "$DB_SG" \
+          --region $AWS_PRIMARY_REGION
+      fi
+      echo "Attente disponibilite de l'instance restauree..."
+      aws rds wait db-instance-available --db-instance-identifier wordpress-rds-failback --region $AWS_PRIMARY_REGION
+    # 5. Repointe le secret WordPress east vers la DB restauree
+    - |
+      NEW_HOST=$(aws rds describe-db-instances --db-instance-identifier wordpress-rds-failback \
+        --region $AWS_PRIMARY_REGION --query "DBInstances[0].Endpoint.Address" --output text)
+      WP_DB_PW="${WP_DB_PASSWORD:-$DB_PASSWORD}"
+      aws secretsmanager put-secret-value --secret-id prod/wordpress/db --region $AWS_PRIMARY_REGION \
+        --secret-string "{\"host\":\"$NEW_HOST\",\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"wordpress\",\"password\":\"$WP_DB_PW\"}"
+      echo "Secret east repointe vers $NEW_HOST"
+  rules:
+    - when: manual
+      allow_failure: true
+
+# ============================================================
+# 6bis. FAILBACK EFS + redeploy primary (manuel, apres failback-rds).
+#    Replication INVERSE us-west-2 -> us-east-1 pour rapatrier les medias,
+#    puis redeploie le primary qui MONTE ce replica (primary_replica_fs_id),
+#    promotion (replica writable), et refresh de l'ASG primary.
+#    Route53 refait automatiquement le retour quand le primary est healthy.
+# ============================================================
+failback-efs:
+  extends: .base
+  stage: failback
+  script:
+    # 1. FS source = l'EFS promu en us-west-2 (celui que montent les EC2 west)
+    - |
+      WEST_FS=$(aws efs describe-file-systems --region $AWS_SECONDARY_REGION \
+        --query "FileSystems[?LifeCycleState=='available'].FileSystemId | [0]" --output text)
+      [ -z "$WEST_FS" ] || [ "$WEST_FS" = "None" ] && { echo "Aucun EFS source en $AWS_SECONDARY_REGION"; exit 1; }
+      echo "EFS source (us-west-2) = $WEST_FS"
+    # 2. Replication INVERSE us-west-2 -> us-east-1 (si pas deja en place)
+    - |
+      EXIST=$(aws efs describe-replication-configurations --region $AWS_SECONDARY_REGION \
+        --query "Replications[?SourceFileSystemId=='$WEST_FS'].Destinations[0].FileSystemId | [0]" --output text 2>/dev/null || echo "")
+      if [ -z "$EXIST" ] || [ "$EXIST" = "None" ]; then
+        echo "Creation de la replication inverse $WEST_FS -> $AWS_PRIMARY_REGION"
+        aws efs create-replication-configuration --source-file-system-id "$WEST_FS" \
+          --region $AWS_SECONDARY_REGION --destinations Region=$AWS_PRIMARY_REGION
+      fi
+    # 3. Recupere l'ID du FS replique cote us-east-1, attend qu'il soit synchronise
+    - |
+      EAST_FS=""
+      for i in $(seq 1 30); do
+        EAST_FS=$(aws efs describe-replication-configurations --region $AWS_SECONDARY_REGION \
+          --query "Replications[?SourceFileSystemId=='$WEST_FS'].Destinations[0].FileSystemId | [0]" --output text 2>/dev/null || echo "")
+        [ -n "$EAST_FS" ] && [ "$EAST_FS" != "None" ] && break
+        echo "  destination pas encore prete (tentative $i/30), 20s..."; sleep 20
+      done
+      [ -z "$EAST_FS" ] || [ "$EAST_FS" = "None" ] && { echo "Replica us-east-1 introuvable"; exit 1; }
+      echo "Replica us-east-1 = $EAST_FS"
+      echo "Attente disponibilite + synchro initiale..."
+      for i in $(seq 1 60); do
+        ST=$(aws efs describe-file-systems --file-system-id "$EAST_FS" --region $AWS_PRIMARY_REGION \
+          --query "FileSystems[0].LifeCycleState" --output text 2>/dev/null || echo "")
+        SYNC=$(aws efs describe-replication-configurations --region $AWS_SECONDARY_REGION \
+          --query "Replications[?SourceFileSystemId=='$WEST_FS'].Destinations[0].LastReplicatedTimestamp | [0]" --output text 2>/dev/null || echo "")
+        echo "  etat=$ST lastSync=$SYNC"
+        [ "$ST" = "available" ] && [ -n "$SYNC" ] && [ "$SYNC" != "None" ] && break
+        sleep 20
+      done
+      echo "$EAST_FS" > east_fs.txt
+    # 4. Redeploie le primary qui MONTE le replica (read-only pour l'instant)
+    - |
+      EAST_FS=$(cat east_fs.txt)
+      ALB_DNS_SECONDARY=$(aws elbv2 describe-load-balancers --names wp-alb-secondary \
+        --region $AWS_SECONDARY_REGION --query "LoadBalancers[0].DNSName" --output text)
+      cdk deploy InfraPrimaryStack --require-approval never \
+        -c primary_replica_fs_id="$EAST_FS" -c alb_dns_secondary="$ALB_DNS_SECONDARY"
+    # 5. Promotion : supprime la replication inverse -> le replica east devient WRITABLE
+    - |
+      aws efs delete-replication-configuration --source-file-system-id "$WEST_FS" --region $AWS_SECONDARY_REGION \
+        && echo "Replication inverse supprimee -> replica east writable" \
+        || echo "AVERTISSEMENT: promotion echouee"
+    # 6. Refresh de l'ASG primary -> les EC2 remontent le replica (writable) et lisent la DB rapatriee
+    - |
+      ASG=$(aws autoscaling describe-auto-scaling-groups --region $AWS_PRIMARY_REGION \
+        --query "AutoScalingGroups[?contains(AutoScalingGroupName,'Asg')].AutoScalingGroupName" --output text)
+      aws autoscaling start-instance-refresh --auto-scaling-group-name "$ASG" \
+        --preferences '{"MinHealthyPercentage":50,"InstanceWarmup":300}' --region $AWS_PRIMARY_REGION
+      echo "Instance refresh lance sur $ASG - le primary sert avec les donnees rapatriees"
+      echo "Route53 rebascule automatiquement sur us-east-1 quand le health check primary est healthy."
+    # 7. RE-ARME LA DR : replication east (promu) -> us-west-2.
+    #    EAST_FS est maintenant standalone (promu) -> il peut redevenir SOURCE.
+    #    Cree un NOUVEAU replica en us-west-2 ; deploy-secondary-compute le remontera ensuite.
+    - |
+      EAST_FS=$(cat east_fs.txt)
+      echo "Re-armement de la replication DR : $EAST_FS -> $AWS_SECONDARY_REGION"
+      aws efs create-replication-configuration --source-file-system-id "$EAST_FS" \
+        --region $AWS_PRIMARY_REGION --destinations Region=$AWS_SECONDARY_REGION \
+        && echo "Replication east -> west re-creee. Lance ensuite 'deploy-secondary-compute' pour remonter le nouveau replica." \
+        || echo "AVERTISSEMENT: re-armement replication echoue (reessayer apres stabilisation du FS)"
   rules:
     - when: manual
       allow_failure: true
