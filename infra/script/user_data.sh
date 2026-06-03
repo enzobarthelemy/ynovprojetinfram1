@@ -10,7 +10,7 @@ SECRET_DB_ADMIN="prod/wordpress/db-admin" # compte master (admin) pour creer le 
 SECRET_WP="prod/wordpress/app"
 # EFS_ID, RDS_HOST, ALB_DNS_NAME, SITE_FQDN exportes en entete par le launch template (tokens CDK)
 EFS_ID="${EFS_ID:?EFS_ID manquant}"
-RDS_HOST="${RDS_HOST:?RDS_HOST manquant}"
+RDS_HOST="${RDS_HOST:-}"   # vide sur le secondary cold standby (DB via secret au failover)
 ALB_DNS_NAME="${ALB_DNS_NAME:?ALB_DNS_NAME manquant}"
 SITE_FQDN="${SITE_FQDN:-$ALB_DNS_NAME}"   # FQDN Route53 (failover), fallback ALB DNS
 WP_SITE_URL="http://${SITE_FQDN}"
@@ -92,26 +92,30 @@ WP_ADMIN_EMAIL=$(echo "$WP_SECRET" | jq -r '.admin_email')
 
 # ============================================================
 # 3b. Creation du user applicatif WordPress (idempotent)
-#     Execute avec les creds ADMIN. Le user app n'a de droits que sur la base wordpress.
+#     SKIP si DB_HOST vide (secondary cold standby : pas de DB tant qu'il n'y a pas de failover)
 # ============================================================
-echo "Attente disponibilite MySQL..."
-for i in $(seq 1 30); do
-  if mysqladmin ping -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" --silent 2>/dev/null; then
-    echo "MySQL repond."
-    break
-  fi
-  echo "  pas encore pret (tentative $i/30), attente 10s..."
-  sleep 10
-done
+if [ -n "$DB_HOST" ]; then
+  echo "Attente disponibilite MySQL ($DB_HOST)..."
+  for i in $(seq 1 30); do
+    if mysqladmin ping -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" --silent 2>/dev/null; then
+      echo "MySQL repond."
+      break
+    fi
+    echo "  pas encore pret (tentative $i/30), attente 10s..."
+    sleep 10
+  done
 
-echo "Creation du user applicatif '$DB_USER'..."
-mysql -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" <<SQL
+  echo "Creation du user applicatif '$DB_USER'..."
+  mysql -h "$DB_HOST" -P "$DB_PORT" -u "$ADMIN_USER" -p"$ADMIN_PASS" <<SQL || echo "AVERTISSEMENT: creation user echouee (DB peut-etre non prete)"
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\`;
 CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%';
 FLUSH PRIVILEGES;
 SQL
-echo "User applicatif pret."
+  echo "User applicatif pret."
+else
+  echo "DB_HOST vide -> COLD STANDBY (pas de DB). Creation user SQL sautee."
+fi
 
 # ============================================================
 # 4. docker-compose.yml
@@ -166,33 +170,38 @@ docker compose up -d
 
 # ============================================================
 # 6. WP-CLI : installation WordPress + WooCommerce (idempotent)
-#    Skippé sur la région secondaire (EFS en lecture seule)
+#    SKIP si pas de DB (secondary cold standby) : l'install se fera apres failover.
 # ============================================================
-WP_CLI="docker compose -f $COMPOSE_DIR/docker-compose.yml run --rm wp-cli wp"
+if [ -n "$DB_HOST" ]; then
+  WP_CLI="docker compose -f $COMPOSE_DIR/docker-compose.yml run --rm wp-cli wp"
 
-echo "Attente démarrage WordPress..."
-until docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T wordpress curl -sf http://localhost > /dev/null 2>&1; do
-  sleep 5
-done
+  echo "Attente démarrage WordPress..."
+  for i in $(seq 1 30); do
+    docker compose -f "$COMPOSE_DIR/docker-compose.yml" exec -T wordpress curl -sf http://localhost > /dev/null 2>&1 && break
+    sleep 5
+  done
 
-if ! $WP_CLI core is-installed 2>/dev/null; then
-  echo "Installation WordPress..."
-  $WP_CLI core install \
-    --url="$WP_SITE_URL" \
-    --title="My Store" \
-    --admin_user="$WP_ADMIN_USER" \
-    --admin_password="$WP_ADMIN_PASS" \
-    --admin_email="$WP_ADMIN_EMAIL" \
-    --skip-email
-fi
+  if ! $WP_CLI core is-installed 2>/dev/null; then
+    echo "Installation WordPress..."
+    $WP_CLI core install \
+      --url="$WP_SITE_URL" \
+      --title="My Store" \
+      --admin_user="$WP_ADMIN_USER" \
+      --admin_password="$WP_ADMIN_PASS" \
+      --admin_email="$WP_ADMIN_EMAIL" \
+      --skip-email || echo "AVERTISSEMENT: install WP echouee"
+  fi
 
-if ! $WP_CLI plugin is-installed woocommerce 2>/dev/null; then
-  echo "Installation WooCommerce..."
-  $WP_CLI plugin install woocommerce --activate
+  if ! $WP_CLI plugin is-installed woocommerce 2>/dev/null; then
+    echo "Installation WooCommerce..."
+    $WP_CLI plugin install woocommerce --activate || echo "AVERTISSEMENT: install WooCommerce echouee"
+  else
+    $WP_CLI plugin activate woocommerce || true
+  fi
+
+  $WP_CLI rewrite flush || true
 else
-  $WP_CLI plugin activate woocommerce
+  echo "DB_HOST vide -> COLD STANDBY : install WP/WooCommerce sautee (se fera au failover)."
 fi
-
-$WP_CLI rewrite flush
 
 echo "===> User data terminé avec succès."

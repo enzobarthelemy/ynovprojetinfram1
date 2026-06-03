@@ -18,6 +18,10 @@ db_password = os.getenv("DB_PASSWORD", "ChangeMe1234")
 # (recupere par le pipeline apres le deploy du secondary). Permet le failover Route53
 # sans reference cross-region CDK.
 alb_dns_secondary = app.node.try_get_context("alb_dns_secondary")
+# ID du FS EFS replique (us-west-2), fourni au deploy du secondary (pass 2) via
+# -c replica_fs_id=... apres le deploy du primary. Sans lui, le secondary ne cree
+# pas l'EFS/ASG (pass 1).
+replica_fs_id = app.node.try_get_context("replica_fs_id")
 
 # CliCredentialsStackSynthesizer : utilise les creds du CI (pas de bootstrap)
 # + bucket d'assets pour les templates des nested stacks.
@@ -43,6 +47,7 @@ InfraStack(app, "InfraSecondaryStack",
     db_password=db_password,
     is_primary=False,
     account_id=account_id,
+    replica_fs_id=replica_fs_id,
     env=cdk.Environment(account=account_id, region="us-west-2"),
     synthesizer=make_synth(f"ynov-cdk-assets-{account_id}-usw2"),
 )

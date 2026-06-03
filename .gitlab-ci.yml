@@ -1,9 +1,10 @@
 stages:
-  - secrets           # Secrets Manager (2 regions) - statiques
-  - deploy-secondary  # InfraSecondaryStack (us-west-2) : cree le bucket S3 cible CRR
-  - deploy-primary    # InfraPrimaryStack (us-east-1) : tout + S3 CRR vers secondary
-  - dr                # DR : snapshot RDS cross-region (planifie horaire / manuel)
-  - failover          # Bascule DB vers us-west-2 (manuel, 1 clic)
+  - secrets                  # Secrets Manager (2 regions) - statiques
+  - deploy-secondary         # Pass 1 : VPC/SG/RDS-subnet/ALB/S3 (sans EFS/ASG)
+  - deploy-primary           # InfraPrimaryStack : tout + EFS replication + S3 CRR + Route53
+  - deploy-secondary-compute # Pass 2 : EFS (monte le replica) + ASG sur le secondary
+  - dr                       # DR : snapshot RDS cross-region (planifie horaire / manuel)
+  - failover                 # Bascule complete vers us-west-2 (manuel, 1 clic)
 
 variables:
   AWS_DEFAULT_REGION: us-east-1
@@ -77,6 +78,36 @@ deploy-primary:
         - infra/**/*
 
 # ============================================================
+# 3bis. Pass 2 du secondary : monte le FS EFS replique (cree par le primary) + ASG
+# ============================================================
+deploy-secondary-compute:
+  extends: .base
+  stage: deploy-secondary-compute
+  script:
+    - |
+      echo "Recuperation de l'ID du FS EFS replique..."
+      REPLICA_ID=""
+      for i in $(seq 1 30); do
+        REPLICA_ID=$(aws efs describe-replication-configurations --region $AWS_PRIMARY_REGION \
+          --query "Replications[0].Destinations[0].FileSystemId" --output text 2>/dev/null || echo "")
+        if [ -n "$REPLICA_ID" ] && [ "$REPLICA_ID" != "None" ]; then break; fi
+        echo "  pas encore pret (tentative $i/30), attente 20s..."; sleep 20
+      done
+      if [ -z "$REPLICA_ID" ] || [ "$REPLICA_ID" = "None" ]; then echo "ERREUR: replica EFS introuvable"; exit 1; fi
+      echo "Replica EFS = $REPLICA_ID"
+      for i in $(seq 1 30); do
+        ST=$(aws efs describe-file-systems --file-system-id "$REPLICA_ID" --region $AWS_SECONDARY_REGION --query "FileSystems[0].LifeCycleState" --output text 2>/dev/null || echo "")
+        echo "  etat replica: $ST"; [ "$ST" = "available" ] && break; sleep 20
+      done
+      cdk deploy InfraSecondaryStack --require-approval never -c replica_fs_id="$REPLICA_ID"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+      when: never
+    - if: '$CI_COMMIT_BRANCH'
+      changes:
+        - infra/**/*
+
+# ============================================================
 # 4. DR : snapshot RDS primary + copie cross-region us-west-2
 #    Planifie horaire (GitLab Schedule, cron "0 * * * *") ou manuel.
 #    Restauration au failover : restore-db-instance-from-db-snapshot en us-west-2.
@@ -129,10 +160,11 @@ failover-rds:
         --output text)
       [ -z "$LATEST" ] || [ "$LATEST" = "None" ] && { echo "Aucun snapshot disponible en $AWS_SECONDARY_REGION"; exit 1; }
       echo "Snapshot a restaurer : $LATEST"
-    # 2. Recupere subnet group + SG DB du secondary (crees par InfraSecondaryStack)
+    # 2. Subnet group (nom fixe, cold standby) + SG DB du secondary (par tag)
     - |
-      SUBNET_GROUP=$(aws rds describe-db-instances --db-instance-identifier wordpress-rds-secondary --region $AWS_SECONDARY_REGION --query "DBInstances[0].DBSubnetGroup.DBSubnetGroupName" --output text)
-      DB_SG=$(aws rds describe-db-instances --db-instance-identifier wordpress-rds-secondary --region $AWS_SECONDARY_REGION --query "DBInstances[0].VpcSecurityGroups[0].VpcSecurityGroupId" --output text)
+      SUBNET_GROUP="wordpress-rds-subnet-secondary"
+      DB_SG=$(aws ec2 describe-security-groups --region $AWS_SECONDARY_REGION \
+        --filters "Name=tag:Name,Values=SG-DB-Backup" --query "SecurityGroups[0].GroupId" --output text)
       echo "SubnetGroup=$SUBNET_GROUP SG=$DB_SG"
     # 3. Restaure le snapshot en nouvelle instance (si pas deja fait)
     - |
@@ -157,6 +189,18 @@ failover-rds:
       aws secretsmanager put-secret-value --secret-id prod/wordpress/db --region $AWS_SECONDARY_REGION \
         --secret-string "{\"host\":\"$NEW_HOST\",\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"wordpress\",\"password\":\"$WP_DB_PW\"}"
       echo "Secret repointe vers $NEW_HOST"
+    # 5bis. Promotion de l'EFS replica : supprime la config de replication -> replica WRITABLE
+    #       (necessaire pour que WordPress puisse ecrire sur le secondary apres bascule)
+    - |
+      PRIMARY_EFS=$(aws efs describe-replication-configurations --region $AWS_PRIMARY_REGION \
+        --query "Replications[0].SourceFileSystemId" --output text 2>/dev/null || echo "")
+      if [ -n "$PRIMARY_EFS" ] && [ "$PRIMARY_EFS" != "None" ]; then
+        aws efs delete-replication-configuration --source-file-system-id "$PRIMARY_EFS" --region $AWS_PRIMARY_REGION \
+          && echo "Replication EFS supprimee -> replica writable" \
+          || echo "AVERTISSEMENT: promotion EFS echouee (us-east-1 injoignable ?) - replica reste read-only"
+      else
+        echo "Pas de config de replication trouvee (deja promu ?)"
+      fi
     # 6. Rafraichit l'ASG secondary -> les instances rebootent et lisent le nouveau host
     - |
       ASG=$(aws autoscaling describe-auto-scaling-groups --region $AWS_SECONDARY_REGION \
