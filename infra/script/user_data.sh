@@ -48,13 +48,16 @@ fi
 
 # Droits www-data (UID 33) — uniquement si l'EFS est accessible en ecriture
 # (un EFS cible de replication serait read-only : on saute le chown dans ce cas)
+# EFS_WRITABLE : 1 si on possede l'EFS (site source/promu), 0 si replica read-only (standby)
 if touch "$EFS_MOUNT/.mount_test" 2>/dev/null; then
   rm -f "$EFS_MOUNT/.mount_test"
+  EFS_WRITABLE=1
   echo "EFS en Lecture-Ecriture : application des droits 33:33"
   chown -R 33:33 "$EFS_MOUNT"
   chmod 755 "$EFS_MOUNT"
 else
-  echo "EFS en Lecture seule : chown saute"
+  EFS_WRITABLE=0
+  echo "EFS en Lecture seule (replica standby) : chown + install WP sautes (WordPress deja replique)"
 fi
 
 # ============================================================
@@ -170,9 +173,10 @@ docker compose up -d
 
 # ============================================================
 # 6. WP-CLI : installation WordPress + WooCommerce (idempotent)
-#    SKIP si pas de DB (secondary cold standby) : l'install se fera apres failover.
+#    SKIP si pas de DB OU si EFS read-only (standby) : sur le replica, WordPress est
+#    deja installe (repliquE depuis east) et l'EFS n'est pas inscriptible -> on sert juste.
 # ============================================================
-if [ -n "$DB_HOST" ]; then
+if [ -n "$DB_HOST" ] && [ "$EFS_WRITABLE" = "1" ]; then
   WP_CLI="docker compose -f $COMPOSE_DIR/docker-compose.yml run --rm wp-cli wp"
 
   echo "Attente démarrage WordPress..."
@@ -201,7 +205,7 @@ if [ -n "$DB_HOST" ]; then
 
   $WP_CLI rewrite flush || true
 else
-  echo "DB_HOST vide -> COLD STANDBY : install WP/WooCommerce sautee (se fera au failover)."
+  echo "Install WP/WooCommerce sautee (pas de DB, ou EFS replica read-only en standby)."
 fi
 
 echo "===> User data terminé avec succès."
