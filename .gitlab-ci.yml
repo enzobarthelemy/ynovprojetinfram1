@@ -41,9 +41,19 @@ variables:
 .base:
   image: nikolaik/python-nodejs:python3.13-nodejs20
   resource_group: aws-deploy   # serialise les deploiements (pas 2 en parallele)
+  variables:
+    npm_config_prefix: "$CI_PROJECT_DIR/.npm-global"   # npm -g va dans un dossier cachable
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  cache:
+    key: cdk-tools-v1
+    paths:
+      - .npm-global/
+      - .cache/pip/
   before_script:
+    - export PATH="$CI_PROJECT_DIR/.npm-global/bin:$PATH"
+    # CDK CLI : reinstalle seulement si absent du cache (fallback sur -> ne casse jamais)
+    - command -v cdk >/dev/null 2>&1 || npm install -g aws-cdk
     - pip install awscli aws-cdk-lib constructs --quiet
-    - npm install -g aws-cdk
     - cd infra
 
 # Regles des jobs de DEPLOY (= aussi failback) : push avec changement infra/**/*,
@@ -64,6 +74,9 @@ variables:
 secrets:
   extends: [.base, .deploy_rules]
   stage: secrets
+  # before_script leger : ce job n'utilise que l'awscli (pas de CDK) -> on saute npm/cdk
+  before_script:
+    - pip install awscli --quiet
   script:
     - |
       WP_ADMIN_PW="${WP_ADMIN_PASSWORD:-$DB_PASSWORD}"
