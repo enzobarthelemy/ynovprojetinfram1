@@ -2,6 +2,7 @@ stages:
   - secrets           # Secrets Manager (2 regions) - statiques
   - deploy-secondary  # InfraSecondaryStack (us-west-2) : cree le bucket S3 cible CRR
   - deploy-primary    # InfraPrimaryStack (us-east-1) : tout + S3 CRR vers secondary
+  - dr                # DR : snapshot RDS cross-region (planifie horaire / manuel)
 
 variables:
   AWS_DEFAULT_REGION: us-east-1
@@ -67,3 +68,37 @@ deploy-primary:
     - if: '$CI_COMMIT_BRANCH'
       changes:
         - infra/**/*
+
+# ============================================================
+# 4. DR : snapshot RDS primary + copie cross-region us-west-2
+#    Planifie horaire (GitLab Schedule, cron "0 * * * *") ou manuel.
+#    Restauration au failover : restore-db-instance-from-db-snapshot en us-west-2.
+# ============================================================
+rds-snapshot-dr:
+  image: nikolaik/python-nodejs:python3.13-nodejs20
+  stage: dr
+  before_script:
+    - pip install awscli --quiet
+  script:
+    - TS=$(date +%Y%m%d-%H%M%S)
+    - SNAP="wordpress-primary-snap-$TS"
+    # 1. Snapshot du RDS primary (us-east-1)
+    - echo "Creation snapshot $SNAP..."
+    - aws rds create-db-snapshot --db-instance-identifier wordpress-rds-primary --db-snapshot-identifier "$SNAP" --region $AWS_PRIMARY_REGION
+    - aws rds wait db-snapshot-available --db-snapshot-identifier "$SNAP" --region $AWS_PRIMARY_REGION
+    # 2. Copie cross-region vers us-west-2
+    - echo "Copie vers $AWS_SECONDARY_REGION..."
+    - SRC_ARN="arn:aws:rds:${AWS_PRIMARY_REGION}:${AWS_ACCOUNT_ID}:snapshot:${SNAP}"
+    - aws rds copy-db-snapshot --source-db-snapshot-identifier "$SRC_ARN" --target-db-snapshot-identifier "$SNAP" --region $AWS_SECONDARY_REGION
+    # 3. Retention : garde les 3 derniers dans chaque region
+    - |
+      for R in $AWS_PRIMARY_REGION $AWS_SECONDARY_REGION; do
+        OLD=$(aws rds describe-db-snapshots --region $R --snapshot-type manual \
+          --query "reverse(sort_by(DBSnapshots[?starts_with(DBSnapshotIdentifier,'wordpress-primary-snap-')], &SnapshotCreateTime))[3:].DBSnapshotIdentifier" \
+          --output text)
+        for S in $OLD; do echo "Suppression ancien snapshot $S ($R)"; aws rds delete-db-snapshot --db-snapshot-identifier "$S" --region $R; done
+      done
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+    - when: manual
+      allow_failure: true

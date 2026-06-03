@@ -8,7 +8,6 @@ from stacks.nested.efs import EfsNested
 from stacks.nested.alb import AlbNested
 from stacks.nested.asg import AsgNested
 from stacks.nested.s3 import S3PrimaryNested, S3SecondaryNested
-from stacks.nested.backup import BackupVaultNested, BackupPlanNested
 from stacks.nested.route53 import Route53Nested
 
 
@@ -55,10 +54,11 @@ class InfraStack(Stack):
             db_password=db_password,
             name=rds_name, multi_az=is_primary)
 
-        # 4. EFS (independant par region ; DR cross-region via job AWS Backup)
+        # 4. EFS — primary replique en read-only vers us-west-2 (DR cross-region native)
         self.efs = EfsNested(self, "Efs",
             web_subnet_ids=[self.vpc.web_subnet_1.subnet_id, self.vpc.web_subnet_2.subnet_id],
-            efs_sg_id=self.sg.efs_sg.ref, name=rds_name)
+            efs_sg_id=self.sg.efs_sg.ref, name=rds_name,
+            replicate_to_region="us-west-2" if is_primary else None)
 
         # 5. ALB
         self.alb = AlbNested(self, "Alb",
@@ -83,21 +83,7 @@ class InfraStack(Stack):
         else:
             self.s3 = S3SecondaryNested(self, "S3", account_id=account_id)
 
-        # 8. AWS Backup natif (DR EFS cross-region, gere par AWS - aucun job)
-        vault_name = "ynov-efs-vault"
-        if is_primary:
-            # Plan planifie + copie cross-region vers us-west-2
-            self.backup = BackupPlanNested(self, "Backup",
-                efs_id=self.efs.file_system_id,
-                account_id=account_id,
-                vault_name=vault_name,
-                secondary_region="us-west-2")
-            self.backup.add_dependency(self.efs)
-        else:
-            # Vault destination (cible de la copie cross-region)
-            self.backup = BackupVaultNested(self, "Backup", vault_name=vault_name)
-
-        # 9. Route53 (primary uniquement) : cree la hosted zone + strategie failover.
+        # 8. Route53 (primary uniquement) : cree la hosted zone + strategie failover.
         #    alb_dns_secondary fourni au deploy via le contexte CDK (pas de ref cross-region).
         if is_primary and alb_dns_secondary:
             self.route53 = Route53Nested(self, "Route53",
