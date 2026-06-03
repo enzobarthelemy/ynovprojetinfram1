@@ -14,6 +14,10 @@ app = cdk.App()
 
 account_id = os.getenv("AWS_ACCOUNT_ID")
 db_password = os.getenv("DB_PASSWORD", "ChangeMe1234")
+# DNS de l'ALB secondaire, fourni au deploy du primary via -c alb_dns_secondary=...
+# (recupere par le pipeline apres le deploy du secondary). Permet le failover Route53
+# sans reference cross-region CDK.
+alb_dns_secondary = app.node.try_get_context("alb_dns_secondary")
 
 # CliCredentialsStackSynthesizer : utilise les creds du CI (pas de bootstrap)
 # + bucket d'assets pour les templates des nested stacks.
@@ -27,6 +31,7 @@ InfraStack(app, "InfraPrimaryStack",
     db_password=db_password,
     is_primary=True,
     account_id=account_id,
+    alb_dns_secondary=alb_dns_secondary,
     env=cdk.Environment(account=account_id, region="us-east-1"),
     synthesizer=make_synth(f"ynov-cdk-assets-{account_id}-use1"),
 )
