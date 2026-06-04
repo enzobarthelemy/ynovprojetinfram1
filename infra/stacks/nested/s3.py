@@ -24,10 +24,18 @@ class S3PrimaryNested(NestedStack):
 
         lab_role_arn = f"arn:aws:iam::{account_id}:role/LabRole"
         secondary_bucket_arn = f"arn:aws:s3:::ynov-wordpress-secondary-{account_id}"
+        primary_bucket_name = f"ynov-wordpress-primary-{account_id}"
 
         self.bucket = s3.CfnBucket(self, "PrimaryBucket",
-            bucket_name=f"ynov-wordpress-primary-{account_id}",
+            bucket_name=primary_bucket_name,
             versioning_configuration=s3.CfnBucket.VersioningConfigurationProperty(status="Enabled"),
+            # Desactive le "Bloquer tous les acces publics" pour autoriser la bucket policy publique
+            public_access_block_configuration=s3.CfnBucket.PublicAccessBlockConfigurationProperty(
+                block_public_acls=False,
+                block_public_policy=False,
+                ignore_public_acls=False,
+                restrict_public_buckets=False,
+            ),
             replication_configuration=s3.CfnBucket.ReplicationConfigurationProperty(
                 role=lab_role_arn,
                 rules=[s3.CfnBucket.ReplicationRuleProperty(
@@ -37,4 +45,19 @@ class S3PrimaryNested(NestedStack):
                         bucket=secondary_bucket_arn),
                 )],
             ),
+        )
+
+        # Bucket policy : lecture publique des objets (medias WordPress servis sur le web)
+        s3.CfnBucketPolicy(self, "PrimaryBucketPolicy",
+            bucket=self.bucket.ref,
+            policy_document={
+                "Version": "2012-10-17",
+                "Statement": [{
+                    "Sid": "PublicReadGetObject",
+                    "Effect": "Allow",
+                    "Principal": "*",
+                    "Action": "s3:GetObject",
+                    "Resource": f"arn:aws:s3:::{primary_bucket_name}/*",
+                }],
+            },
         )
