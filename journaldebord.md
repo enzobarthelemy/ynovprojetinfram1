@@ -3,11 +3,13 @@
 ---------------------------------------------------------------------------------------------------------
 
 Sujet : 3-Tiers classique et haute disponibilité
+
 Période : Du 29/05/2026 au 05/06/2026
+
 Composition du groupe :
-	- Enzo BARTHELEMY
-	- Thomas MARCILLY
-	- Paul HAMON
+- Enzo BARTHELEMY
+- Thomas MARCILLY
+- Paul HAMON
 
 
 ---------------------------------------------------------------------------------------------------------
@@ -48,9 +50,9 @@ Composition du groupe :
 - Validation de l'architecture cible et des plans associés
 - Recherches techniques sur le failover global inter-vpc : approfondissement ultérieurement
 - Préparation questions pour prochaine intervention formateur :
-	- Réplicat RDS bloquée sur autre région. Alternative ?
-	- Playbook ?
-	- Implémentations supplémentaires si on a le temps : WAF ?
+ - Réplicat RDS bloquée sur autre région. Alternative ?
+ - Playbook ?
+ - Implémentations supplémentaires si on a le temps : WAF ?
 - Debug merge des configs & test de déploiement globale de l'infrastructure
 
 ** Paul :
@@ -75,12 +77,13 @@ Composition du groupe :
 
 
 *** ACTIONS POUR DEMAIN : 
-	- Modifier vpc_stack.py et sg_stack.py pour résoudre les problèmes d'accès à Internet & BDD des EC2 :
-		- Ajout NAT GATEWAY -> vpc_stack.py
-		- Association sur les routes -> vpc_stack.py
-		- Création d'une règle sortante 0.0.0.0/0 sur les SG -> sg_stack.py
-		- Création d'une règle sortante 3306 vers SG BDD -> sg_stack.py
-	- Approfondir les tests du user_data.sh. Dernier résultat : Docker UP mais unhealthy
+
+- Modifier vpc_stack.py et sg_stack.py pour résoudre les problèmes d'accès à Internet & BDD des EC2 :
+ - Ajout NAT GATEWAY -> vpc_stack.py
+ - Association sur les routes -> vpc_stack.py
+ - Création d'une règle sortante 0.0.0.0/0 sur les SG -> sg_stack.py
+ - Création d'une règle sortante 3306 vers SG BDD -> sg_stack.py
+- Approfondir les tests du user_data.sh. Dernier résultat : Docker UP mais unhealthy
 
 
 ---------------------------------------------------------------------------------------------------------
@@ -88,14 +91,14 @@ Composition du groupe :
 
 ** Travail en commun :
 - Réponses aux questions (formateur) :
-	- Playbook ? Imaginer des scénarios et (si possible et si le temps) les reproduire
-	- WAF ? si on veut
-	- Blocage RDS inter-région ? Proposer une solution alternative pour la démo, et noter dans un cas de PROD comment faire
-	- Etudier Route 53 pour la bascule inter-région + voir stratégie de bascule (actif/actif vraiment nécessaire ? Mettre en place un stratégie d'allumage des VMs en cas de bascule ?) --> vu par Enzo/Paul
-	- Etudier les configs IAM qu'on aurait dû faire (hors AWS Academy)
-	- Revoir les stacks CloudFormation pour n'en avoir qu'un seul au lieu d'un stack par type d'instance --> vu par Thomas
-	- Mettre à jour le schéma d'architecture (nat gateway, sg, route 53) --> vu par Paul
-	- Annulation de la contrainte Docker (on peut retirer si complication)
+ - Playbook ? Imaginer des scénarios et (si possible et si le temps) les reproduire
+ - WAF ? si on veut
+ - Blocage RDS inter-région ? Proposer une solution alternative pour la démo, et noter dans un cas de PROD comment faire
+ - Etudier Route 53 pour la bascule inter-région + voir stratégie de bascule (actif/actif vraiment nécessaire ? Mettre en place un stratégie d'allumage des VMs en cas de bascule ?) --> vu par Enzo/Paul
+ - Etudier les configs IAM qu'on aurait dû faire (hors AWS Academy)
+ - Revoir les stacks CloudFormation pour n'en avoir qu'un seul au lieu d'un stack par type d'instance --> vu par Thomas
+ - Mettre à jour le schéma d'architecture (nat gateway, sg, route 53) --> vu par Paul
+ - Annulation de la contrainte Docker (on peut retirer si complication)
 
 ** Paul :
 - Correction vpc_stack.py : Création NAT GATEWAY, association sur les tables de routage PrivateWeb
@@ -120,11 +123,11 @@ Composition du groupe :
 
 
 *** ACTIONS POUR DEMAIN : 
-	- Revoir efs.py : réappliquer la config de réplication Read-Only sur la 2e région (Wordpress n'a pas besoin d'écrire pour la 2e région car pas de traffic dessus sauf si incident)
-	- Revoir route53.py : test à approfondir, création d'une stratégie de trafic ?
-	- Revoir HealthCheck Route 53 ?
-	- Point plan d'architecture v2
-	- Etude des configs IAM qu'on aurait du faire dans un contexte de PROD		
+- Revoir efs.py : réappliquer la config de réplication Read-Only sur la 2e région (Wordpress n'a pas besoin d'écrire pour la 2e région car pas de traffic dessus sauf si incident)
+- Revoir route53.py : test à approfondir, création d'une stratégie de trafic ?
+- Revoir HealthCheck Route 53 ?
+- Point plan d'architecture v2
+- Etude des configs IAM qu'on aurait du faire dans un contexte de PROD		
 
 
 ---------------------------------------------------------------------------------------------------------
@@ -133,6 +136,7 @@ Composition du groupe :
 ** Travail en commun :
 - Review plan d'architecture v2
 - Définition de la stratégie de bascule :
+
 	- V1 de l'infra (ce projet) : us-east-1 en Primary + toutes les instances activées, us-west-2 en Secondary + toutes les instances activées.
 								  Stratégie de Warm/Warm. On privilégie la disponibilité et la résilience des données au détriment des coûts à cause des contraintes rencontrées par AWS Academy (voir Contraintes.md).
 	- V2 de l'infra (contexte PROD) : us-east-1 en Primary + toutes les instances activées, us-west-2 en Secondary + instances partiellement activées (uniquement la moitié).
@@ -169,35 +173,56 @@ Composition du groupe :
 
 
 *** ACTIONS POUR DEMAIN : 
-	- Test global de l'infra
-	- Test de failover : coupure volontaire EC2 PRIMARY et vérification de bascule sur SECONDARY
-	- Test de surcharge EC2 : vérification déploiement de nouvelles instances
-	- Test de destruction EC2 : résiliation volontaire d'une instance EC2 et vérification déploiement d'une nouvelle instance
-	- Poursuite des documentations (README.md et autres)
+- Test global de l'infra
+- Test de failover : coupure volontaire EC2 PRIMARY et vérification de bascule sur SECONDARY
+- Test de surcharge EC2 : vérification déploiement de nouvelles instances
+- Test de destruction EC2 : résiliation volontaire d'une instance EC2 et vérification déploiement d'une nouvelle instance
+- Poursuite des documentations (README.md et autres)
 
 
 ---------------------------------------------------------------------------------------------------------
-### Jour 5 : 04/06/2026 - Objectif : 
+### Jour 5 : 04/06/2026 - Objectif : vérification globale de l'infrastructure & tests de failover, documentations
 
 ** Travail en commun :
-
+- Test global de l'infra
+ - Infrastructure primaire globalement fonctionnelle
+ - Test WP Offload Media sur Wordpress (envoi des médias sur S3) --> OK, mais autorisation publique et stratégie de compartiment nécessaire côté S3
+ - Impossible de configurer Route 53 pour S3 (pas adapté), alternative CloudFront restreinte à cause d'AWS Academy. Bascule manuelle à faire en cas de besoin
+- Test de destruction EC2 : résiliation volontaire d'une instance EC2 et vérification déploiement d'une nouvelle instance --> OK, 2 instances remontées en environ 3-4 min
+- Test de failover : coupure volontaire EC2 PRIMARY et vérification de bascule sur SECONDARY -> OK, réduction du délai de healthCheck à 10s sur Route53 et réduction à 2x2s sur ALB nécessaire. Downtime d'environ 1 min. Failback transparent.
+- Test de surcharge EC2 : vérification déploiement de nouvelles instances --> 2 instances supplémentaires déployées, puis résiliation des 2 instances supplémentaires
+- Test failover RDS : application snapshot sur 2e région puis arrêt RDS 1ère région, vérif bascule 2e région --> OK, bascule en 2 min
+- Test failback : maj RDS et EFS sur 1ère région, remise en route 1ère région & réactivation des réplicats sur 2e région --> RDS OK, EFS OK (très long)
 
 ** Paul :
-
+- Modif RB-AWS-001
+- Suite RB-AWS-005 : Procédure de Failback
+- Création RB-AWS-006 : Procédure de Failover
+- Simulation financière de l'infrastructure à l'année (condition PROD)
+- Mise à jour schéma d'architecture + export en format .png et .pdf
 
 ** Enzo :
-
+- Alimentation Contraintes.md
+- Modif route53.py : rectification des délais HealthCheck
+- Modif alb.py : rectification des délais HealthCheck
+- Alimentation README.md
 
 ** Thomas :
+- Redéploiement infra à zéro en One Click --> OK
+- Modif S3.py : autorisation accès public + stratégie de compartiment
+- Alimentation README.md
+- Destruction infrastructure
 
 
-
-*** ACTIONS POUR DEMAIN : 
-
+*** ACTIONS POUR DEMAIN :
+- Redéploiement infrastructure
+- Test global de l'infra
+- Tests basiques de failover
+- Organisation de la présentation
 
 
 ---------------------------------------------------------------------------------------------------------
-### Jour 6 : 05/06/2026 - Objectif : finalisation projet & présentation
+### Jour 6 : 05/06/2026 - Objectif : finalisation projet, dernières vérifications & présentation
 
 ** Travail en commun :
 
