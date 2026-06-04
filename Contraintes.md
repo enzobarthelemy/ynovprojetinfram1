@@ -13,3 +13,11 @@
 	Difficulté : L'environnement AWS Academy empêche la création de nouveaux rôles IAM selon les usages dont nous aurions eu besoin.
 	Alternative Projet : Utilisation du rôle LabRole fourni par AWS Academy.
 	Solution en PRODUCTION : Création de rôles IAM avec le principe du moindre privilège pour les instances et les actions réalisées entre les types d'instances.
+	
+3- Failover S3
+	Difficulté : Nous souhaitions mettre en place une solution de bascule automatique du S3 primaire vers le S3 secondaire afin d'avoir une configuration fixe côté Wordpress. Cependant, à cause de l'environnement AWS Academy
+				 et de la configuration du plugin Wordpress, une bascule automatique ne sera pas possible.
+	Alternative Projet : Modification de la configuration du plugin manuellement après bascule sur la région secondaire.
+	Solution en PRODUCTION : Configuration d'un CloudFront regroupant les deux buckets S3. Cela permettra l'affichage des fichiers peut importe la région active, cependant une action manuelle est tout de même nécessaire
+							 sur la configuration du plugin car on ne peut que renseigner un bucket et non pas un FQDN. De ce fait, sans action en cas de failover, les fichiers pourraient être lus et accessibles, mais
+							 il serait impossible d'uploader de nouveaux médias.
