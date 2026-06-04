@@ -278,12 +278,13 @@ failover:
           --region $AWS_SECONDARY_REGION
       fi
       aws rds wait db-instance-available --db-instance-identifier wordpress-rds-failover --region $AWS_SECONDARY_REGION
-    # 2. Repointe le secret west sur la DB fraiche (preserve le password existant)
+    # 2. Repointe le secret west sur la DB fraiche (construction directe, sans jq)
     - |
       NEW_HOST=$(aws rds describe-db-instances --db-instance-identifier wordpress-rds-failover \
         --region $AWS_SECONDARY_REGION --query "DBInstances[0].Endpoint.Address" --output text)
-      NEW=$(aws secretsmanager get-secret-value --region $AWS_SECONDARY_REGION --secret-id prod/wordpress/db --query SecretString --output text | jq --arg h "$NEW_HOST" '. + {host:$h}')
-      aws secretsmanager put-secret-value --secret-id prod/wordpress/db --region $AWS_SECONDARY_REGION --secret-string "$NEW"
+      WP_DB_PW="${WP_DB_PASSWORD:-$DB_PASSWORD}"
+      aws secretsmanager put-secret-value --secret-id prod/wordpress/db --region $AWS_SECONDARY_REGION \
+        --secret-string "{\"host\":\"$NEW_HOST\",\"port\":\"3306\",\"name\":\"wordpress\",\"username\":\"wordpress\",\"password\":\"$WP_DB_PW\"}"
       echo "Secret west -> $NEW_HOST (donnees du dernier snapshot)"
     # 3. Promotion de l'EFS replica west -> writable (supprime la config de replication cote east)
     - |
@@ -330,10 +331,8 @@ failback-rds:
     - pip install awscli --quiet
   script:
     - |
-      # DB west ACTIVE = celle pointee par le secret west (contient les ecritures de la panne)
-      WEST_HOST=$(aws secretsmanager get-secret-value --region $AWS_SECONDARY_REGION --secret-id prod/wordpress/db --query SecretString --output text | jq -r '.host // empty')
-      [ -z "$WEST_HOST" ] && { echo "Secret west sans host -> DB active introuvable"; exit 1; }
-      WEST_DB_ID=$(echo "$WEST_HOST" | cut -d. -f1)
+      # DB west active apres un failover = wordpress-rds-failover (contient les ecritures de la panne)
+      WEST_DB_ID="wordpress-rds-failover"
       echo "DB west active = $WEST_DB_ID"
       TS=$(date +%Y%m%d-%H%M%S); SNAP="wordpress-failback-snap-$TS"
       aws rds create-db-snapshot --db-instance-identifier "$WEST_DB_ID" --db-snapshot-identifier "$SNAP" --region $AWS_SECONDARY_REGION

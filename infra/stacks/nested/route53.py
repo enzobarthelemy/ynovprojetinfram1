@@ -36,15 +36,15 @@ class Route53Nested(NestedStack):
             health_check_config=route53.CfnHealthCheck.HealthCheckConfigProperty(
                 type="HTTP", fully_qualified_domain_name=alb_dns_primary,
                 port=80, resource_path="/", request_interval=10,
-                failure_threshold=3, measure_latency=True),
+                failure_threshold=1, measure_latency=True),
             health_check_tags=[route53.CfnHealthCheck.HealthCheckTagProperty(
                 key="Name", value=f"hc-primary-{name}")],
         )
         hc_secondary = route53.CfnHealthCheck(self, "HealthCheckSecondary",
             health_check_config=route53.CfnHealthCheck.HealthCheckConfigProperty(
                 type="HTTP", fully_qualified_domain_name=alb_dns_secondary,
-                port=80, resource_path="/", request_interval=30,
-                failure_threshold=3, measure_latency=True),
+                port=80, resource_path="/", request_interval=10,
+                failure_threshold=1, measure_latency=True),
             health_check_tags=[route53.CfnHealthCheck.HealthCheckTagProperty(
                 key="Name", value=f"hc-secondary-{name}")],
         )
