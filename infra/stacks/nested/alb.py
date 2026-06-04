@@ -31,9 +31,9 @@ class AlbNested(NestedStack):
             health_check_enabled=True,
             health_check_path="/",
             health_check_protocol="HTTP",
-            health_check_interval_seconds=30,
+            health_check_interval_seconds=5,
             healthy_threshold_count=2,
-            unhealthy_threshold_count=3,
+            unhealthy_threshold_count=2,
         )
 
         elbv2.CfnListener(self, "Listener",
