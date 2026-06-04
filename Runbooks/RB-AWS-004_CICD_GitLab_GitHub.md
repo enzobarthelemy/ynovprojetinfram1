@@ -2,8 +2,8 @@
 
 1. Informations generales
 -------------------------
-	* ID : RB-AWS-005
-	* Version : 1.0
+	* ID : RB-AWS-004
+	* Version : 1.1
 	* Auteur/Equipe : Thomas MARCILLY, equipe infra
 	* Description : Permet de declencher, superviser et valider le deploiement de
 	  l'infrastructure AWS (stacks CDK nested) via le pipeline CI/CD GitLab.
@@ -26,7 +26,8 @@
 	* Variables CI/CD GitLab requises (Settings > CI/CD > Variables), non Protected :
 		- AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN (creds Academy, ~4h)
 		- AWS_ACCOUNT_ID
-		- DB_PASSWORD (mot de passe master RDS)
+		- DB_PASSWORD (mot de passe de l'utilisateur applicatif WordPress ; le compte
+		  master RDS est genere/gere automatiquement par AWS via manage_master_user_password)
 		- (optionnel) WP_ADMIN_PASSWORD, WP_DB_PASSWORD, WP_ADMIN_EMAIL
 
 3. Environnement & ressources cibles
@@ -37,11 +38,14 @@
 	* Buckets d'assets CDK (templates nested) :
 		- ynov-cdk-assets-<ACCOUNT_ID>-use1 (us-east-1)
 		- ynov-cdk-assets-<ACCOUNT_ID>-usw2 (us-west-2)
-	* Stages du pipeline (ordre) :
-		- secrets           : cree les secrets Secrets Manager (2 regions)
-		- deploy-secondary  : deploie InfraSecondaryStack (us-west-2)
-		- deploy-primary    : deploie InfraPrimaryStack (us-east-1) + Route53 failover
-		- dr                : snapshot RDS cross-region (manuel/planifie)
+	* Stages du pipeline (ordre, deploiement complet) :
+		- secrets               : cree les secrets Secrets Manager (2 regions)
+		- deploy-secondary      : InfraSecondaryStack (us-west-2) - pass 1 (sans EFS/ASG)
+		- deploy-primary        : InfraPrimaryStack (us-east-1) + EFS replication + Route53 failover
+		- seed-west-db          : restaure une DB en us-west-2 depuis un snapshot east (west devient actif)
+		- deploy-secondary-compute : pass 2 - EFS replica + ASG sur le secondary
+		- dr                    : snapshot RDS cross-region (manuel/planifie)
+		- failover / failback   : bascule / retour DR (declenches via l'input run_mode)
 	* Stacks CloudFormation cibles :
 		- InfraPrimaryStack (us-east-1) + nested (VPC, SG, RDS, EFS, ALB, ASG, S3, Route53)
 		- InfraSecondaryStack (us-west-2) + nested
@@ -81,10 +85,10 @@
 
 	4- Superviser le pipeline
 		1: GitLab > Build > Pipelines > ouvrir le pipeline en cours
-		2: Suivre l'enchainement des stages : secrets > deploy-secondary > deploy-primary
+		2: Suivre l'enchainement : secrets > deploy-secondary > deploy-primary > seed-west-db > deploy-secondary-compute
 		3: En cas d'echec d'un job, ouvrir le job pour lire les logs
 
-		Resultat attendu : les 3 stages passent au vert dans l'ordre
+		Resultat attendu : tous les stages passent au vert (laisser aller jusqu'a deploy-secondary-compute)
 
 	5- Validation du deploiement
 		1: AWS CLI : aws cloudformation describe-stacks --stack-name InfraPrimaryStack --region us-east-1 --query "Stacks[0].StackStatus" --output text

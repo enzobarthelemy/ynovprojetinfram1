@@ -13,8 +13,8 @@ V- Procédure de rollback (en cas d'échec)
 ID du Runbook: RB-AWS-006
 Version : 1.0 
 Auteur / Équipe: Paul Hamon / Groupe Tiers classique et haute disponibilité 
-Description: Ce runbook décrit la procédure de "Failover" (Bascule d'urgence) vers la région de secours (us-west-2) suite à la perte de la région primaire (us-east-1). Il déclenche la promotion du système de fichiers EFS en mode lecture/écriture et rafraîchit les serveurs de secours pour qu'ils prennent le relais complet de la production.
-NB : La bascule réseau (DNS) est gérée de manière totalement automatique par AWS Route 53. Ce runbook ne concerne que l'activation des écritures sur le stockage.
+Description: Ce runbook décrit la procédure de "Failover" (Bascule d'urgence) vers la région de secours (us-west-2) suite à la perte de la région primaire (us-east-1). Le job restaure la base de données depuis le dernier snapshot disponible en us-west-2 (`wordpress-rds-failover`), repointe le secret de connexion, promeut le système de fichiers EFS en mode lecture/écriture et rafraîchit les serveurs de secours pour qu'ils prennent le relais complet de la production.
+NB : La bascule réseau (DNS) est gérée de manière totalement automatique par AWS Route 53. Prérequis : au moins un snapshot DR doit exister en us-west-2 (job `rds-snapshot-dr` planifié horaire / manuel).
 
 ## II- Prérequis AWS & accès
 Pour exécuter ce runbook, vous devez disposer des éléments suivants :
@@ -39,20 +39,20 @@ Confirmez qu'un incident majeur (Crash d'AZ, panne régionale AWS) affecte la r�
 ### B. Étape 2 : Exécution de l'action principale (Déclenchement de la bascule)
 1. Se rendre sur le projet GitLab, dans Build > Pipelines.
 2. Cliquez sur le bouton bleu "Run pipeline" (en haut à droite).
-3. Sélectionnez la branche "main".
-4. Dans la section "Variables", ajoutez une nouvelle variable avec Key : `RUN_MODE` et Value : `failover`.
+3. Sélectionnez la branche de déploiement (`mt-nested-stacks`).
+4. Dans la section "Inputs", renseignez le champ `run_mode` avec la valeur `failover`.
 5. Cliquez sur "Run pipeline".
 
 ### C. Étape 3 : Application du changement (Promotion de l'environnement)
 Contrairement à un déploiement classique, l'architecture "Warm Standby" permet une reprise très rapide.
 1. Sur la vue graphique de la pipeline GitLab, cliquez sur le bouton "Play" du job manuel `failover`.
-Attendu : Le job s'exécute avec succès. En arrière-plan, le script supprime la configuration de réplication EFS (ce qui promeut immédiatement le disque de l'Oregon en mode "Writable"), puis lance un "Instance Refresh" sur l'Auto Scaling Group de l'Oregon. Les serveurs EC2 redémarrent pour monter le disque avec les droits d'écriture.
+Attendu : Le job s'exécute avec succès. En arrière-plan, le script : (1) restaure le dernier snapshot RDS en une nouvelle base `wordpress-rds-failover` et repointe le secret de connexion, (2) supprime la configuration de réplication EFS (ce qui promeut immédiatement le disque de l'Oregon en mode "Writable"), (3) lance un "Instance Refresh" sur l'Auto Scaling Group de l'Oregon, (4) supprime l'ancienne base seed `wordpress-rds-secondary`. Les serveurs EC2 redémarrent pour monter le disque en écriture et lire la base restaurée.
 
 ### D. Étape 4 : Validation (Post-check)
 1. Ouvrez le nom de domaine du site WordPress dans un navigateur web.
 2. Connectez-vous à l'interface d'administration WordPress (/wp-admin).
 3. Tentez de téléverser (upload) une nouvelle image dans la bibliothèque de médias.
-Attendu : Le site charge rapidement. L'upload de l'image réussit, confirmant que l'EFS secondaire est bien inscriptible et que la base de données secondaire (`wordpress-rds-secondary`) encaisse bien les nouvelles requêtes. La production a repris.
+Attendu : Le site charge rapidement. L'upload de l'image réussit, confirmant que l'EFS secondaire est bien inscriptible et que la base de données restaurée (`wordpress-rds-failover`) encaisse bien les nouvelles requêtes. La production a repris.
 
 ## V- Procédure de rollback (en cas d'échec)
 L'environnement principal (Est) étant déjà en panne, le risque d'aggraver la situation sur l'Ouest est faible.

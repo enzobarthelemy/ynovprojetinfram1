@@ -39,8 +39,8 @@
 		* Option A : Interface web GitLab
 			1: Se rendre sur le projet GitLab, dans Build > Pipelines
 			2: Cliquer sur le bouton bleu "Run pipeline" (en haut à droite)
-			3: Sélectionner la branche "main"
-			4: Dans la section "Variables", ajouter une nouvelle variable avec Key : RUN_MODE et Value : failback
+			3: Sélectionner la branche de déploiement (mt-nested-stacks)
+			4: Dans la section "Inputs", renseigner le champ run_mode avec la valeur failback
 			5: Cliquer sur "Run pipeline"
 			
 		Résultat attendu : La pipeline se lance. Les jobs de déploiement classique sont ignorés au profit des jobs de reprise d'activité qui se mettent en attente d'action manuelle.
