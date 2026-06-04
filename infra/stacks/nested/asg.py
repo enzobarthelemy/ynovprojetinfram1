@@ -9,11 +9,13 @@ from aws_cdk import (
 from constructs import Construct
 
 
-def _build_user_data(efs_id, rds_host, alb_dns, site_fqdn):
+def _build_user_data(efs_id, rds_host, alb_dns, site_fqdn, master_secret_arn):
     """
-    Construit le user_data en injectant EFS_ID, RDS_HOST, ALB_DNS_NAME et SITE_FQDN
-    via tokens CDK (Fn.join). Le script lit ces valeurs en variables d'env (entete).
-    Les variables bash ${...} du script restent intactes (pas de Fn.sub).
+    Construit le user_data en injectant EFS_ID, RDS_HOST, ALB_DNS_NAME, SITE_FQDN et
+    MASTER_SECRET_ARN via tokens CDK (Fn.join). Le script lit ces valeurs en variables
+    d'env (entete). Les variables bash ${...} du script restent intactes (pas de Fn.sub).
+    MASTER_SECRET_ARN : secret master genere par RDS (east) pour creer le user applicatif ;
+    vide cote secondary (le user applicatif existe deja dans la DB restauree).
     """
     script_path = os.path.join(os.path.dirname(__file__), "..", "..", "script", "user_data.sh")
     with open(script_path, "r") as f:
@@ -29,6 +31,7 @@ def _build_user_data(efs_id, rds_host, alb_dns, site_fqdn):
         "export RDS_HOST='", rds_host, "'\n",
         "export ALB_DNS_NAME='", alb_dns, "'\n",
         "export SITE_FQDN='", site_fqdn, "'\n",
+        "export MASTER_SECRET_ARN='", master_secret_arn, "'\n",
         body,
     ]))
 
@@ -42,11 +45,11 @@ class AsgNested(NestedStack):
     def __init__(self, scope: Construct, construct_id: str, *,
                  web_subnet_ids: list, asg_sg_id: str, target_group_arn: str,
                  efs_id: str, rds_host: str, alb_dns: str, site_fqdn: str,
-                 name: str, **kwargs) -> None:
+                 name: str, master_secret_arn: str = "", **kwargs) -> None:
         super().__init__(scope, construct_id, **kwargs)
 
         account_id = self.account
-        user_data_b64 = _build_user_data(efs_id, rds_host, alb_dns, site_fqdn)
+        user_data_b64 = _build_user_data(efs_id, rds_host, alb_dns, site_fqdn, master_secret_arn)
 
         lt = ec2.CfnLaunchTemplate(self, "LaunchTemplate",
             launch_template_data=ec2.CfnLaunchTemplate.LaunchTemplateDataProperty(
