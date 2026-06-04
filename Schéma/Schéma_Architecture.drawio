@@ -1,6 +1,6 @@
 <mxfile host="Electron" pages="2">
   <diagram name="Archi globale" id="3z_gGQG2pu-RIYUwB4hF">
-    <mxGraphModel dx="1884" dy="875" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+    <mxGraphModel dx="2214" dy="1029" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
         <mxCell id="0" />
         <mxCell id="1" parent="0" />
@@ -511,12 +511,12 @@
     </mxGraphModel>
   </diagram>
   <diagram name="Flux réseau" id="vK5lnp1TGo4INy1XyPvY">
-    <mxGraphModel dx="1449" dy="1842" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+    <mxGraphModel dx="2214" dy="2198" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
       <root>
         <mxCell id="ZVVyflWmL3-Pcti8yjCQ-0" />
         <mxCell id="ZVVyflWmL3-Pcti8yjCQ-1" parent="ZVVyflWmL3-Pcti8yjCQ-0" />
         <mxCell id="uMYoPR-lC3wnaaGf4P8E-0" parent="ZVVyflWmL3-Pcti8yjCQ-1" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;rounded=0;" value="&lt;font style=&quot;font-size: 24px;&quot;&gt;Diagramme des flux&lt;/font&gt;" vertex="1">
-          <mxGeometry height="30" width="236" x="296" y="-80" as="geometry" />
+          <mxGeometry height="30" width="236" x="296" y="-40" as="geometry" />
         </mxCell>
         <mxCell id="uMYoPR-lC3wnaaGf4P8E-1" parent="ZVVyflWmL3-Pcti8yjCQ-1" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;" value="" vertex="1">
           <mxGeometry height="750" width="180" x="110" y="100" as="geometry" />
