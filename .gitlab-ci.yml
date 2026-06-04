@@ -1,3 +1,9 @@
+spec:
+  inputs:
+    run_mode:
+      description: "Mode d'execution : vide = deploy ; 'failover' = bascule us-west-2 ; 'failback' = retour us-east-1"
+      default: ""
+---
 # ============================================================
 # Architecture ACTIVE-ACTIVE : east = source, sync east -> west, redondance Route53.
 #
@@ -36,7 +42,7 @@ variables:
   AWS_DEFAULT_REGION: us-east-1
   AWS_PRIMARY_REGION: us-east-1
   AWS_SECONDARY_REGION: us-west-2
-  RUN_MODE: ""               # "" = deploy ; "failover" ; "failback"
+  RUN_MODE: "$[[ inputs.run_mode ]]"   # alimente par l'input run_mode (Run pipeline)
 
 .base:
   image: nikolaik/python-nodejs:python3.13-nodejs20
