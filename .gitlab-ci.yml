@@ -1,3 +1,9 @@
+spec:
+  inputs:
+    run_mode:
+      description: "Mode d'execution : vide = deploy ; 'failover' = bascule us-west-2 ; 'failback' = retour us-east-1"
+      default: ""
+---
 # ============================================================
 # Architecture ACTIVE-ACTIVE : east = source, sync east -> west, redondance Route53.
 #
@@ -36,14 +42,24 @@ variables:
   AWS_DEFAULT_REGION: us-east-1
   AWS_PRIMARY_REGION: us-east-1
   AWS_SECONDARY_REGION: us-west-2
-  RUN_MODE: ""               # "" = deploy ; "failover" ; "failback"
+  RUN_MODE: "$[[ inputs.run_mode ]]"   # alimente par l'input run_mode (Run pipeline)
 
 .base:
   image: nikolaik/python-nodejs:python3.13-nodejs20
   resource_group: aws-deploy   # serialise les deploiements (pas 2 en parallele)
+  variables:
+    npm_config_prefix: "$CI_PROJECT_DIR/.npm-global"   # npm -g va dans un dossier cachable
+    PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+  cache:
+    key: cdk-tools-v1
+    paths:
+      - .npm-global/
+      - .cache/pip/
   before_script:
+    - export PATH="$CI_PROJECT_DIR/.npm-global/bin:$PATH"
+    # CDK CLI : reinstalle seulement si absent du cache (fallback sur -> ne casse jamais)
+    - command -v cdk >/dev/null 2>&1 || npm install -g aws-cdk
     - pip install awscli aws-cdk-lib constructs --quiet
-    - npm install -g aws-cdk
     - cd infra
 
 # Regles des jobs de DEPLOY (= aussi failback) : push avec changement infra/**/*,
@@ -64,6 +80,9 @@ variables:
 secrets:
   extends: [.base, .deploy_rules]
   stage: secrets
+  # before_script leger : ce job n'utilise que l'awscli (pas de CDK) -> on saute npm/cdk
+  before_script:
+    - pip install awscli --quiet
   script:
     - |
       WP_ADMIN_PW="${WP_ADMIN_PASSWORD:-$DB_PASSWORD}"
@@ -239,7 +258,34 @@ failover:
   before_script:
     - pip install awscli --quiet
   script:
-    # 1. Promotion de l'EFS replica west -> writable (supprime la config de replication cote east)
+    # 1. Restaure la DB west depuis le DERNIER snapshot (donnees les plus recentes, RPO ~1h).
+    #    Cree wordpress-rds-failover ; west continue de servir sur sa DB seedee pendant ce temps.
+    - |
+      LATEST=$(aws rds describe-db-snapshots --region $AWS_SECONDARY_REGION --snapshot-type manual \
+        --query "reverse(sort_by(DBSnapshots[?starts_with(DBSnapshotIdentifier,'wordpress-primary-snap-') && Status=='available'], &SnapshotCreateTime))[0].DBSnapshotIdentifier" \
+        --output text)
+      [ -z "$LATEST" ] || [ "$LATEST" = "None" ] && { echo "Aucun snapshot disponible en $AWS_SECONDARY_REGION (lance rds-snapshot-dr d'abord)"; exit 1; }
+      echo "Dernier snapshot west = $LATEST"
+      DB_SG=$(aws ec2 describe-security-groups --region $AWS_SECONDARY_REGION \
+        --filters "Name=tag:Name,Values=SG-DB-Backup" --query "SecurityGroups[0].GroupId" --output text)
+      if ! aws rds describe-db-instances --db-instance-identifier wordpress-rds-failover --region $AWS_SECONDARY_REGION 2>/dev/null; then
+        aws rds restore-db-instance-from-db-snapshot \
+          --db-instance-identifier wordpress-rds-failover \
+          --db-snapshot-identifier "$LATEST" \
+          --db-instance-class db.t3.micro --no-multi-az --no-publicly-accessible \
+          --db-subnet-group-name wordpress-rds-subnet-secondary \
+          --vpc-security-group-ids "$DB_SG" \
+          --region $AWS_SECONDARY_REGION
+      fi
+      aws rds wait db-instance-available --db-instance-identifier wordpress-rds-failover --region $AWS_SECONDARY_REGION
+    # 2. Repointe le secret west sur la DB fraiche (preserve le password existant)
+    - |
+      NEW_HOST=$(aws rds describe-db-instances --db-instance-identifier wordpress-rds-failover \
+        --region $AWS_SECONDARY_REGION --query "DBInstances[0].Endpoint.Address" --output text)
+      NEW=$(aws secretsmanager get-secret-value --region $AWS_SECONDARY_REGION --secret-id prod/wordpress/db --query SecretString --output text | jq --arg h "$NEW_HOST" '. + {host:$h}')
+      aws secretsmanager put-secret-value --secret-id prod/wordpress/db --region $AWS_SECONDARY_REGION --secret-string "$NEW"
+      echo "Secret west -> $NEW_HOST (donnees du dernier snapshot)"
+    # 3. Promotion de l'EFS replica west -> writable (supprime la config de replication cote east)
     - |
       PRIMARY_EFS=$(aws efs describe-replication-configurations --region $AWS_PRIMARY_REGION \
         --query "Replications[0].SourceFileSystemId" --output text 2>/dev/null || echo "")
@@ -250,7 +296,7 @@ failover:
       else
         echo "Pas de config de replication trouvee (deja promu ?)"
       fi
-    # 2. Refresh ASG west -> les EC2 remontent l'EFS en writable et passent en mode actif
+    # 4. Refresh ASG west -> les EC2 reprennent le nouveau host + l'EFS writable
     - |
       ASG=$(aws autoscaling describe-auto-scaling-groups --region $AWS_SECONDARY_REGION \
         --query "AutoScalingGroups[?contains(AutoScalingGroupName,'Asg')].AutoScalingGroupName" --output text)
@@ -258,6 +304,13 @@ failover:
         --preferences '{"MinHealthyPercentage":50,"InstanceWarmup":300}' --region $AWS_SECONDARY_REGION
       echo "ASG west rafraichi. Route53 bascule sur us-west-2 des que le health check east echoue."
       echo "FAILBACK : une fois east repare, Run pipeline RUN_MODE=failback (failback-rds puis failback-efs)."
+    # 5. Nettoyage : supprime l'ancienne DB seed (west sert maintenant sur wordpress-rds-failover)
+    #    -> evite 2 instances RDS qui tournent en us-west-2.
+    - |
+      aws rds delete-db-instance --db-instance-identifier wordpress-rds-secondary \
+        --skip-final-snapshot --delete-automated-backups --region $AWS_SECONDARY_REGION 2>/dev/null \
+        && echo "Ancienne DB seed wordpress-rds-secondary supprimee (1 seule DB en west)" \
+        || echo "wordpress-rds-secondary deja absente (rien a nettoyer)"
   rules:
     - if: '$RUN_MODE == "failover"'
       when: manual
@@ -265,9 +318,10 @@ failover:
     - when: never
 
 # ============================================================
-# 6. FAILBACK etape 1 (RUN_MODE=failback) : rapatrie la DB west vers east.
-#    Snapshot de wordpress-rds-secondary (west, contient les ecritures de la panne)
-#    -> copie cross-region east -> restaure wordpress-rds-failback -> repointe le secret east.
+# 6. FAILBACK etape 1 (RUN_MODE=failback) : rapatrie la DB west ACTIVE vers east.
+#    Snapshot de la DB west pointee par le secret (wordpress-rds-failover apres un failover,
+#    sinon wordpress-rds-secondary) -> copie cross-region east -> restaure wordpress-rds-failback
+#    -> repointe le secret EAST. Le secret WEST reste inchange (us-west-2 continue de repondre).
 # ============================================================
 failback-rds:
   image: nikolaik/python-nodejs:python3.13-nodejs20
@@ -276,9 +330,13 @@ failback-rds:
     - pip install awscli --quiet
   script:
     - |
+      # DB west ACTIVE = celle pointee par le secret west (contient les ecritures de la panne)
+      WEST_HOST=$(aws secretsmanager get-secret-value --region $AWS_SECONDARY_REGION --secret-id prod/wordpress/db --query SecretString --output text | jq -r '.host // empty')
+      [ -z "$WEST_HOST" ] && { echo "Secret west sans host -> DB active introuvable"; exit 1; }
+      WEST_DB_ID=$(echo "$WEST_HOST" | cut -d. -f1)
+      echo "DB west active = $WEST_DB_ID"
       TS=$(date +%Y%m%d-%H%M%S); SNAP="wordpress-failback-snap-$TS"
-      echo "Snapshot de wordpress-rds-secondary (west) -> $SNAP"
-      aws rds create-db-snapshot --db-instance-identifier wordpress-rds-secondary --db-snapshot-identifier "$SNAP" --region $AWS_SECONDARY_REGION
+      aws rds create-db-snapshot --db-instance-identifier "$WEST_DB_ID" --db-snapshot-identifier "$SNAP" --region $AWS_SECONDARY_REGION
       aws rds wait db-snapshot-available --db-snapshot-identifier "$SNAP" --region $AWS_SECONDARY_REGION
     - |
       SRC_ARN="arn:aws:rds:${AWS_SECONDARY_REGION}:${AWS_ACCOUNT_ID}:snapshot:${SNAP}"
