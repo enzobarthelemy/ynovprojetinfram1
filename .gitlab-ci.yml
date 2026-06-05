@@ -84,6 +84,19 @@ secrets:
   before_script:
     - pip install awscli --quiet
   script:
+    # One-touch provisioning : cree les buckets d'assets CDK (templates JSON des nested stacks)
+    # s'ils n'existent pas. Necessaires car le bootstrap CDK est interdit sur AWS Academy
+    # (CliCredentialsStackSynthesizer pointe sur ces buckets). Idempotent.
+    - |
+      for REG in "$AWS_PRIMARY_REGION" "$AWS_SECONDARY_REGION"; do
+        case "$REG" in us-east-1) SFX=use1;; us-west-2) SFX=usw2;; *) SFX=$(echo "$REG" | tr -d '-');; esac
+        B="ynov-cdk-assets-${AWS_ACCOUNT_ID}-${SFX}"
+        if aws s3api head-bucket --bucket "$B" 2>/dev/null; then
+          echo "Bucket d'assets $B deja present"
+        else
+          aws s3 mb "s3://$B" --region "$REG" && echo "Bucket d'assets $B cree"
+        fi
+      done
     - |
       WP_ADMIN_PW="${WP_ADMIN_PASSWORD:-$DB_PASSWORD}"
       WP_DB_PW="${WP_DB_PASSWORD:-$DB_PASSWORD}"
