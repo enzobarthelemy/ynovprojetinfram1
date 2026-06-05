@@ -226,6 +226,7 @@ Un site Wordpress nommé "My Store" s'affichera avec un article "Hello world!" e
 Ce test prouve le bon fonctionnement :
 
 - de la redirection de Route 53 vers la région principale us-east-1
+- du partage EFS
 - des instances EC2 et du Docker Wordpress
 - de la base RDS
 
