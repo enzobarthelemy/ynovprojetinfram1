@@ -32,6 +32,7 @@ class AlbNested(NestedStack):
             health_check_path="/",
             health_check_protocol="HTTP",
             health_check_interval_seconds=5,
+            health_check_timeout_seconds=2,   # doit etre < a l'intervalle (5s)
             healthy_threshold_count=2,
             unhealthy_threshold_count=2,
         )
