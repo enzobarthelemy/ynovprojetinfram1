@@ -225,13 +225,19 @@ Composition du groupe :
 ### Jour 6 : 05/06/2026 - Objectif : finalisation projet, dernières vérifications & présentation
 
 ** Travail en commun :
-
+- Organisation de la présentation
+- Redéploiement infrastructure -> Test us-east-1 OK mais erreur connexion BDD us-west-2 (pb restauration BDD)
+- Test de failover : coupure volontaire EC2 PRIMARY et vérification de bascule sur SECONDARY -> OK
+- Test de destruction EC2 : résiliation volontaire d'une instance EC2 et vérification déploiement d'une nouvelle instance --> OK
+- Entrainement sur la présentation
 
 ** Paul :
-
+- Déploiement infra sur instance AWS perso + tests OK
 
 ** Enzo :
-
+- Déploiement infra sur instance AWS perso + tests OK
 
 ** Thomas :
-
+- Debug pb connexion BDD us-west-2, relance restauration BDD us-west-2 OK
+- Modif s3 -> création automatique des buckets pour assets CDK (création manuelle avant)
+- Modif secrets -> réactualisation des secrets au déploiement de l'infra si déjà existant
