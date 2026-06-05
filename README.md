@@ -163,7 +163,7 @@ Configuration CI/CD côté GitLab :
 
 ### IV. Déploiement de l'infrastructure
 
-Le déploiement de l'infrastructure s'effectue de manière automatisé via le script CDK. CloudFormation orchestre le déploiement et détermine quel type d'instance déployer dans quel ordre.
+Le déploiement de l'infrastructure s'effectue de manière automatisé via le script CDK.
 Ainsi, le déploiement s'effectue de telle sorte :
 
 1. Création des secrets sur les deux régions :
